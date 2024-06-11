@@ -1,0 +1,3 @@
+ram @ https://github.com/xinyu1205/recognize-anything.git
+groundingdino-py==0.4.0
+segment-anything==1.0
