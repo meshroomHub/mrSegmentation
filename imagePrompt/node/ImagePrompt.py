@@ -1,6 +1,6 @@
 from __future__ import print_function
 
-__version__ = "1.3"
+__version__ = "0.1"
 
 from meshroom.core import desc
 import distutils.dir_util as du
@@ -17,7 +17,7 @@ from segmentationRDS import image, segmentation
 import torch
 
 
-class ImageSegmentationRDS(desc.Node):
+class ImagePrompt(desc.Node):
     size = desc.DynamicNodeSize('input')
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
@@ -44,28 +44,28 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             name="recognitionModelPath",
             label="Recognition Model",
             description="Weights file for the recognition model.",
-            value=os.getenv('RECOGNITION_MODEL_PATH'),
+            value=os.getenv('RDS_RECOGNITION_MODEL_PATH',""),
             uid=[0],
         ),
         desc.File(
             name="detectionModelPath",
             label="Detection Model",
             description="Weights file for the detection model.",
-            value=os.getenv('DETECTION_MODEL_PATH'),
+            value=os.getenv('RDS_DETECTION_MODEL_PATH',""),
             uid=[0],
         ),
         desc.File(
             name="detectionConfigPath",
             label="Detection Config",
             description="Config file for the detection model.",
-            value=os.getenv('DETECTION_CONFIG_PATH'),
+            value=os.getenv('RDS_DETECTION_CONFIG_PATH',""),
             uid=[0],
         ),
         desc.File(
             name="segmentationModelPath",
             label="Segmentation Model",
             description="Weights file for the segmentation model.",
-            value=os.getenv('SEGMENTATION_MODEL_PATH'),
+            value=os.getenv('RDS_SEGMENTATION_MODEL_PATH',""),
             uid=[0],
         ),
         desc.StringParam(

@@ -51,7 +51,10 @@ class segmentationRDS:
         self.RAM_IMAGE_SIZE = RAM_IMAGE_SIZE
         # Load models
         # Recognize Anything
-        self.ram = ram_plus(pretrained=RAM_CHECKPOINT_PATH, image_size=RAM_IMAGE_SIZE, vit=RAM_VIT, text_encoder_type='/s/apps/users/multiview/segmentationRDS/develop/tokenizer')
+        text_encoder_type = os.getenv('RDS_TOKENIZER_PATH',"")
+        if text_encoder_type == '':
+            text_encoder_type = 'bert-base-uncased'
+        self.ram = ram_plus(pretrained=RAM_CHECKPOINT_PATH, image_size=RAM_IMAGE_SIZE, vit=RAM_VIT, text_encoder_type=text_encoder_type)
         self.ram.eval()
         self.ram = self.ram.to(torch.device(self.DEVICE))
         # Grounded DINO
