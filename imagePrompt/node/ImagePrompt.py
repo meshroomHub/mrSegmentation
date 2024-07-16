@@ -162,7 +162,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
-            value=lambda attr: desc.Node.internalFolder + ("<FILENAME>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
+            value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
             uid=[],
         ),
