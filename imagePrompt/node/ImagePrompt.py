@@ -217,7 +217,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img = image.loadImage(iFile)
+                    img, PAR = image.loadImage(iFile, True)
                     mask, bboxes, tags = processor.process(image = img,
                                                            prompt = chunk.node.prompt.value,
                                                            synonyms = chunk.node.synonyms.value,
@@ -230,13 +230,13 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
                     chunk.logger.debug('tags: {}'.format(tags))
                     chunk.logger.debug('bboxes: {}'.format(bboxes))
 
-                    image.writeImage(oFile[0], mask)
+                    image.writeImage(oFile[0], mask, PAR)
 
                     if (chunk.node.outputBboxImage.value):
                         imgBoxes = (img * 255.0).astype('uint8')
                         for bbox in bboxes:
                             imgBoxes = image.addRectangle(imgBoxes, bbox)
-                        image.writeImage(oFile[1], imgBoxes)
+                        image.writeImage(oFile[1], imgBoxes, PAR)
 
             del processor
             torch.cuda.empty_cache()

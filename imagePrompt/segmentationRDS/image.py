@@ -14,7 +14,7 @@ ACES_AP0_TO_sRGB_mat = np.array([[2.52140088857822, -1.13399574938275, -0.387561
                                  [-0.276214061561748, 1.37259556630409, -0.0962823557364663],
                                  [-0.0153202000774786, -0.152992561800699, 1.16838719961932]])
 
-ACES_AP1_TO_sRGB_mat = np.matmul(ACES_AP0_TO_sRGB_mat, ACES_AP1_TO_AP0_mat)
+ACES_AP1_TO_sRGB_mat = ACES_AP0_TO_sRGB_mat @ ACES_AP1_TO_AP0_mat
 
 def get_conversion_matrix(fromcolorspace:str, tocolorspace:str) -> np.ndarray:
     if not fromcolorspace in knowncolorspaces:
@@ -53,27 +53,41 @@ def srgb_gamma_inv(x):
     else:
         return 1.055 * pow(min(1.0, x), 1.0/2.4) - 0.055
 
-def loadImage(imagePath: str, incolorspace: str = 'acescg') -> np.ndarray:
+def loadImage(imagePath: str, applyPAR: bool = False, incolorspace: str = 'acescg'):
     oiio_input = oiio.ImageInput.open(imagePath)
     oiio_spec = oiio_input.spec ()
-    oiio_image = oiio_input.read_image(0, 3) # keep only R,G,B channels, float data type
-    if imagePath[-4:].lower() == ".exr":
+    oiio_image = oiio_input.read_image()
+    pixelAspectRatio = oiio_spec.get_float_attribute('PixelAspectRatio', 1.0)
+
+    if pixelAspectRatio != 1.0 and applyPAR:
+        oiio_image_buf = oiio.ImageBuf(oiio_image)
         h,w,c = oiio_image.shape
+        nh = int(float(h) / pixelAspectRatio)
+        oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w, 0, nh, 0, 1, 0, c+1))
+        oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
+
+    if imagePath[-4:].lower() == ".exr":
         convmat = get_conversion_matrix(incolorspace, 'srgb')
-        oiio_image = oiio_image.reshape(h*w,3).T
-        np.matmul(convmat, oiio_image, oiio_image)
-        oiio_image = oiio_image.T.reshape(h,w,3)
+        convmat_oiio = tuple(map(tuple, convmat.T))
+        convmat_oiio = convmat_oiio[0] + (0.0,) + convmat_oiio[1] + (0.0,) + convmat_oiio[2] + (0.,0.,0.,0.,1.)
+        oiio_image_buf = oiio.ImageBuf(oiio_image)
+        oiio_image_buf = oiio.ImageBufAlgo.colormatrixtransform(oiio_image_buf, convmat_oiio)
+        oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
         np_srgb_gamma_inv = np.frompyfunc(srgb_gamma_inv, 1, 1)
         ginv = np_srgb_gamma_inv(np.array(range(100000)) / 100000)
         oiio_image = ginv[np.clip(100000 * oiio_image, 0, 99999).astype('int')].astype('float32')
 
     oiio_input.close()
 
-    return oiio_image
+    return (oiio_image, pixelAspectRatio)
 
-def writeImage(imagePath: str, image: np.ndarray) -> None:
+def writeImage(imagePath: str, image: np.ndarray, pixelAspectRatio: float = 1.0) -> None:
     h,w,c = image.shape
-
+    if pixelAspectRatio != 1.0:
+        oiio_image_buf = oiio.ImageBuf(image)
+        h = int(float(h) * pixelAspectRatio)
+        oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w, 0, h, 0, 1, 0, c+1))
+        image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
     output_image = oiio.ImageOutput.create(imagePath)
     output_image_spec = oiio.ImageSpec(w, h, c, oiio.UINT8)
     if imagePath[-4:].lower() == ".exr":
@@ -108,3 +122,9 @@ def addPoint(image: np.ndarray, point) -> np.ndarray:
     buf = oiio.ImageBuf(image)
     oiio.ImageBufAlgo.render_text(buf, int(point[0]) - 8, int(point[1]) - 8, '*')
     return buf.get_pixels(format='uint8')
+
+def addText(image: np.ndarray, text, x, y, size, color = (255, 0, 0)) -> np.ndarray:
+    buf = oiio.ImageBuf(image)
+    oiio.ImageBufAlgo.render_text(buf, int(x), int(y), text, int(size), "", color)
+    return buf.get_pixels(format='uint8')
+
