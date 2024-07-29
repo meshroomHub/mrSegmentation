@@ -56,7 +56,7 @@ def srgb_gamma_inv(x):
 def loadImage(imagePath: str, applyPAR: bool = False, incolorspace: str = 'acescg'):
     oiio_input = oiio.ImageInput.open(imagePath)
     oiio_spec = oiio_input.spec ()
-    oiio_image = oiio_input.read_image(0, 4)
+    oiio_image = oiio_input.read_image(0, 3)
     pixelAspectRatio = oiio_spec.get_float_attribute('PixelAspectRatio', 1.0)
 
     if pixelAspectRatio != 1.0 and applyPAR:
