@@ -91,6 +91,14 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             value=False,
             uid=[0],
         ),
+        desc.FloatParam(
+            name="thresholdDetection",
+            label="Threshold Detection",
+            description="Threshold for detection, the lower the more sensitive the detector",
+            range=(0.0,1.0,0.1),
+            value=0.2,
+            uid=[0],
+        ),
         desc.IntParam(
             name="bboxMargin",
             label="Detection Margin",
@@ -221,6 +229,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
                     mask, bboxes, tags = processor.process(image = img,
                                                            prompt = chunk.node.prompt.value,
                                                            synonyms = chunk.node.synonyms.value,
+                                                           threshold = chunk.node.thresholdDetection.value,
                                                            force = chunk.node.forceDetection.value,
                                                            bboxMargin = chunk.node.bboxMargin.value,
                                                            invert = chunk.node.maskInvert.value,
