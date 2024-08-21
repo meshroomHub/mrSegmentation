@@ -8,7 +8,7 @@ from meshroom.core import desc
 import os
 
 
-class ImagePrompt(desc.Node):
+class ImageSegmentationPrompt(desc.Node):
     size = desc.DynamicNodeSize('input')
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
