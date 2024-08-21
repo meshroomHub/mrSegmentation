@@ -153,7 +153,8 @@
             ],
             "inputs": {
                 "input": "{StructureFromMotion_1.output}",
-                "exportUndistortedImages": true
+                "exportUndistortedImages": true,
+                "correctPrincipalPoint": true
             },
             "internalInputs": {
                 "color": "#80766f"
