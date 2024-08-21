@@ -3,18 +3,9 @@ from __future__ import print_function
 __version__ = "0.1"
 
 from meshroom.core import desc
-import distutils.dir_util as du
-import shutil
-#import glob
+# import distutils.dir_util as du
+# import shutil
 import os
-
-import pyalicevision as av
-import json
-from pathlib import Path
-
-from segmentationRDS import image, segmentation
-
-import torch
 
 
 class ImagePrompt(desc.Node):
@@ -177,6 +168,9 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
     ]
 
     def resolvedPaths(self, inputSfm, outDir, keepFilename, ext):
+        import pyalicevision as av
+        from pathlib import Path
+
         paths = {}
         dataAV = av.sfmData.SfMData()
         if av.sfmDataIO.load(dataAV, inputSfm, av.sfmDataIO.ALL) and os.path.isdir(outDir):
@@ -194,6 +188,10 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
         return paths
 
     def processChunk(self, chunk):
+        # import json
+        from segmentationRDS import image, segmentation
+        import torch
+
         try:
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
