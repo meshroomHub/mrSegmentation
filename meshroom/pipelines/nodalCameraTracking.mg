@@ -5,13 +5,17 @@
         "fileVersion": "1.1",
         "template": true,
         "nodesVersions": {
+            "ApplyCalibration": "1.0",
             "CameraInit": "11.0",
+            "CheckerboardDetection": "1.0",
             "ConvertSfMFormat": "2.0",
+            "DistortionCalibration": "5.0",
             "ExportAnimatedCamera": "2.0",
+            "ExportDistortion": "1.0",
             "FeatureExtraction": "1.3",
             "FeatureMatching": "2.0",
             "ImageMatching": "2.0",
-            "ImagePrompt": "0.1",
+            "ImageSegmentationPrompt": "0.1",
             "NodalSfM": "2.0",
             "Publish": "1.3",
             "RelativePoseEstimating": "2.0",
@@ -20,6 +24,20 @@
         }
     },
     "graph": {
+        "ApplyCalibration_1": {
+            "nodeType": "ApplyCalibration",
+            "position": [
+                0,
+                0
+            ],
+            "inputs": {
+                "input": "{CameraInit_1.output}",
+                "calibration": "{DistortionCalibration_1.output}"
+            },
+            "internalInputs": {
+                "color": "#80766f"
+            }
+        },
         "CameraInit_1": {
             "nodeType": "CameraInit",
             "position": [
@@ -29,6 +47,33 @@
             "inputs": {},
             "internalInputs": {
                 "color": "#80766f"
+            }
+        },
+        "CameraInit_2": {
+            "nodeType": "CameraInit",
+            "position": [
+                -600,
+                -160
+            ],
+            "inputs": {},
+            "internalInputs": {
+                "label": "CameraInitLensGrid",
+                "color": "#302e2e"
+            }
+        },
+        "CheckerboardDetection_1": {
+            "nodeType": "CheckerboardDetection",
+            "position": [
+                -400,
+                -160
+            ],
+            "inputs": {
+                "input": "{CameraInit_2.output}",
+                "useNestedGrids": true,
+                "exportDebugImages": true
+            },
+            "internalInputs": {
+                "color": "#302e2e"
             }
         },
         "ConvertSfMFormat_1": {
@@ -47,6 +92,20 @@
                 "color": "#4c594c"
             }
         },
+        "DistortionCalibration_1": {
+            "nodeType": "DistortionCalibration",
+            "position": [
+                -200,
+                -160
+            ],
+            "inputs": {
+                "input": "{CheckerboardDetection_1.input}",
+                "checkerboards": "{CheckerboardDetection_1.output}"
+            },
+            "internalInputs": {
+                "color": "#302e2e"
+            }
+        },
         "ExportAnimatedCamera_1": {
             "nodeType": "ExportAnimatedCamera",
             "position": [
@@ -55,10 +114,24 @@
             ],
             "inputs": {
                 "input": "{NodalSfM_1.output}",
-                "exportUndistortedImages": true
+                "exportUndistortedImages": true,
+                "correctPrincipalPoint": true
             },
             "internalInputs": {
                 "color": "#80766f"
+            }
+        },
+        "ExportDistortion_1": {
+            "nodeType": "ExportDistortion",
+            "position": [
+                0,
+                -160
+            ],
+            "inputs": {
+                "input": "{DistortionCalibration_1.output}"
+            },
+            "internalInputs": {
+                "color": "#302e2e"
             }
         },
         "FeatureExtraction_1": {
@@ -68,8 +141,8 @@
                 0
             ],
             "inputs": {
-                "input": "{ImagePrompt_1.input}",
-                "masksFolder": "{ImagePrompt_1.output}"
+                "input": "{ApplyCalibration_1.output}",
+                "masksFolder": "{ImageSegmentationPrompt_1.output}"
             },
             "internalInputs": {
                 "color": "#80766f"
@@ -107,11 +180,11 @@
                 "color": "#80766f"
             }
         },
-        "ImagePrompt_1": {
-            "nodeType": "ImagePrompt",
+        "ImageSegmentationPrompt_1": {
+            "nodeType": "ImageSegmentationPrompt",
             "position": [
                 0,
-                0
+                200
             ],
             "inputs": {
                 "input": "{CameraInit_1.output}",
@@ -146,7 +219,8 @@
             "inputs": {
                 "inputFiles": [
                     "{ExportAnimatedCamera_1.output}",
-                    "{ScenePreview_1.output}"
+                    "{ScenePreview_1.output}",
+                    "{ExportDistortion_1.output}"
                 ]
             }
         },
@@ -175,7 +249,7 @@
                 "cameras": "{ConvertSfMFormat_1.output}",
                 "model": "{NodalSfM_1.output}",
                 "undistortedImages": "{ExportAnimatedCamera_1.outputUndistorted}",
-                "masks": "{ImagePrompt_1.output}",
+                "masks": "{ImageSegmentationPrompt_1.output}",
                 "pointCloudParams": {
                     "particleSize": 0.001,
                     "particleColor": "Red"
