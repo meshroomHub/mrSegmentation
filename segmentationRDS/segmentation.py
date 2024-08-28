@@ -275,3 +275,153 @@ class segmentAnything:
             return (mask_image[:,:,0:1] == 0).astype('float32')
         else:
             return (mask_image[:,:,0:1] > 0).astype('float32')
+
+class recognizeAnything:
+
+    def __init__(self, RAM_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
+        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
+        if self.DEVICE == 'cpu' and useGPU:
+            print("Cannot execute on GPU, fallback to CPU execution mode")
+        self.RAM_IMAGE_SIZE = RAM_IMAGE_SIZE
+        # Load models
+        # Recognize Anything
+        text_encoder_type = os.getenv('RDS_TOKENIZER_PATH',"")
+        if text_encoder_type == '':
+            text_encoder_type = 'bert-base-uncased'
+        self.ram = ram_plus(pretrained=RAM_CHECKPOINT_PATH, image_size=RAM_IMAGE_SIZE, vit=RAM_VIT, text_encoder_type=text_encoder_type)
+        self.ram.eval()
+        self.ram = self.ram.to(torch.device(self.DEVICE))
+
+    def __del__(self):
+        del self.ram
+
+    def get_tags(self, image:np.ndarray) -> list[str]:
+
+        ram_Transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
+                                                        torchvision.transforms.Resize((self.RAM_IMAGE_SIZE, self.RAM_IMAGE_SIZE)),
+                                                        torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        ram_image = ram_Transform(image).unsqueeze(0)
+        res = inference(ram_image.to(self.DEVICE), self.ram)
+        tags = res[0].split('|')
+        for idx in range(len(tags)):
+            tags[idx] = cleanstr(tags[idx])
+
+        return tags
+
+class detectAnything:
+
+    def __init__(self, RAM_CHECKPOINT_PATH:str, GD_CONFIG_PATH:str, GD_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
+        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
+        if self.DEVICE == 'cpu' and useGPU:
+            print("Cannot execute on GPU, fallback to CPU execution mode")
+        self.RAM_IMAGE_SIZE = RAM_IMAGE_SIZE
+        # Load models
+        # Recognize Anything
+        text_encoder_type = os.getenv('RDS_TOKENIZER_PATH',"")
+        if text_encoder_type == '':
+            text_encoder_type = 'bert-base-uncased'
+        self.ram = ram_plus(pretrained=RAM_CHECKPOINT_PATH, image_size=RAM_IMAGE_SIZE, vit=RAM_VIT, text_encoder_type=text_encoder_type)
+        self.ram.eval()
+        self.ram = self.ram.to(torch.device(self.DEVICE))
+        # Grounded DINO
+        args = SLConfig.fromfile(GD_CONFIG_PATH)
+        args.device = self.DEVICE
+        self.gdm = build_model(args)
+        checkpoint = torch.load(GD_CHECKPOINT_PATH, map_location="cpu")
+        self.gdm.load_state_dict(clean_state_dict(checkpoint["model"]), strict=False)
+        self.gdm.eval()
+
+    def __del__(self):
+        del self.ram
+        del self.gdm
+
+    def get_tags(self, image:np.ndarray) -> list[str]:
+
+        ram_Transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
+                                                        torchvision.transforms.Resize((self.RAM_IMAGE_SIZE, self.RAM_IMAGE_SIZE)),
+                                                        torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        ram_image = ram_Transform(image).unsqueeze(0)
+        res = inference(ram_image.to(self.DEVICE), self.ram)
+        tags = res[0].split('|')
+        for idx in range(len(tags)):
+            tags[idx] = cleanstr(tags[idx])
+
+        return tags
+
+
+    def recognize(self, wordlist:list[str], image:np.ndarray, verbose=False):
+
+        tags = self.get_tags(image)
+        if verbose:
+            print(tags)
+        tagInWordList = False
+        for tag in tags:
+            if not tagInWordList and wordlist.count(tag):
+                tagInWordList = True
+        if verbose:
+            print("tagInWordList = {}".format(tagInWordList))
+
+        return (tagInWordList, tags)
+
+
+    def detect(self, image:np.ndarray, TEXT_PROMPT:str, BOX_THRESHOLD=0.25, TEXT_THRESHOLD=0.25, NMS_THRESHOLD=0.8):
+
+        source_h, source_w, _ = image.shape
+        gd_imgSize = get_size_with_aspect_ratio((source_w, source_h), 800, max_size=1333)
+        gd_Transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
+                                                       torchvision.transforms.Resize(gd_imgSize),
+                                                       torchvision.transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        gd_image = gd_Transform(image)
+        # Detection
+        boxes, logits, phrases = predict(self.gdm, gd_image, TEXT_PROMPT, BOX_THRESHOLD, TEXT_THRESHOLD, self.DEVICE)
+        boxes = boxes * torch.Tensor([source_w, source_h, source_w, source_h])
+        xyxy = torchvision.ops.box_convert(boxes=boxes, in_fmt="cxcywh", out_fmt="xyxy").numpy()
+        confidence = logits.numpy()
+        # NMS
+        nms_idx = torchvision.ops.nms(torch.from_numpy(xyxy), torch.from_numpy(confidence), NMS_THRESHOLD).numpy().tolist()
+        xyxy = xyxy[nms_idx]
+        confidence = confidence[nms_idx]
+
+        return xyxy, confidence
+
+
+    def process(self, image: np.ndarray, prompt: str, synonyms: str = '', threshold: float = 0.2, force: bool = False, bboxMargin:int = 0, verbose: bool = False) -> np.ndarray:
+
+        listSynonyms = synonyms.split('\n')
+        listPrompt = prompt.split('\n')
+        wordlist = []
+        for syn in listSynonyms:
+            ls = syn.split(',')
+            for s in ls:
+                wordlist.append(cleanstr(s).lower())
+        for pr in listPrompt:
+            lp = pr.split('.')
+            for p in lp:
+                plower = cleanstr(p).lower()
+                if plower not in wordlist:
+                    wordlist.append(plower)
+                    
+        if verbose:
+            print("wordlist: {}".format(wordlist))
+
+        recoOK, tags = self.recognize(wordlist, image, verbose)
+        bboxes = []
+        if recoOK or force:
+            bboxes, confidence = self.detect(image=image, TEXT_PROMPT=prompt, BOX_THRESHOLD=threshold)
+            if bboxMargin > 0:
+                ratio = 1.0 + (min(max(0, bboxMargin), 100.0) / 100.0)
+                H,W,_ = image.shape
+                for k,bbox in enumerate(bboxes):
+                    if bbox[0] > bbox[2]:
+                        bbox[0], bbox[2] = bbox[2], bbox[0]
+                        bbox[1], bbox[3] = bbox[3], bbox[1]
+                    xc = (bbox[2] + bbox[0]) / 2
+                    yc = (bbox[3] + bbox[1]) / 2
+                    halfNewW = (bbox[2] - bbox[0]) * ratio / 2.0
+                    halfNewH = (bbox[3] - bbox[1]) * ratio / 2.0
+                    bboxes[k][0] = max(0, xc - halfNewW)
+                    bboxes[k][2] = min(W - 1, xc + halfNewW)
+                    bboxes[k][1] = max(0, yc - halfNewH)
+                    bboxes[k][3] = min(H - 1, yc + halfNewH)
+
+        return (bboxes, confidence, tags)
