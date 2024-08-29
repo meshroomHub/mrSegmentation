@@ -114,8 +114,7 @@
             ],
             "inputs": {
                 "input": "{NodalSfM_1.output}",
-                "exportUndistortedImages": true,
-                "correctPrincipalPoint": true
+                "exportUndistortedImages": true
             },
             "internalInputs": {
                 "color": "#80766f"

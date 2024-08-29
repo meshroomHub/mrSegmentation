@@ -164,8 +164,7 @@
             "inputs": {
                 "input": "{StructureFromMotion_1.output}",
                 "sfmDataFilter": "{ImageMatchingMultiSfM_2.inputB}",
-                "exportUndistortedImages": true,
-                "correctPrincipalPoint": true
+                "exportUndistortedImages": true
             },
             "internalInputs": {
                 "color": "#80766f"
