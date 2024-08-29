@@ -3,14 +3,16 @@ __version__ = "0.1"
 from meshroom.core import desc
 import os
 
-class TagsExtraction(desc.Node):
+
+class SegmentAnything(desc.Node):
     size = desc.DynamicNodeSize('input')
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
     category = 'Utils'
     documentation = '''
-Generate a set of tags corresponding to recognized elements using a recognition model.
+Generate a binary mask from an input bounded box and points.
+Based on the Segment Anything model.
 '''
 
     inputs = [
@@ -22,10 +24,24 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             uid=[0],
         ),
         desc.File(
-            name="recognitionModelPath",
-            label="Recognition Model",
-            description="Weights file for the recognition model.",
-            value=os.getenv('RDS_RECOGNITION_MODEL_PATH',""),
+            name="bboxFolder",
+            label="BBoxes Folfer",
+            description="JSON file containing prompting bounded boxes.",
+            value="",
+            uid=[0],
+        ),
+        desc.File(
+            name="segmentationModelPath",
+            label="Segmentation Model",
+            description="Weights file for the segmentation model.",
+            value=os.getenv('RDS_SEGMENTATION_MODEL_PATH'),
+            uid=[0],
+        ),
+        desc.BoolParam(
+            name="maskInvert",
+            label="Invert Masks",
+            description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
+            value=False,
             uid=[0],
         ),
         desc.BoolParam(
@@ -36,29 +52,21 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             uid=[],
         ),
         desc.BoolParam(
-            name="outputTaggedImage",
-            label="Output Tagged Image",
-            description="Write source image with tags baked in.",
-            value=False,
-            uid=[0],
-        ),
-        desc.BoolParam(
             name="keepFilename",
             label="Keep Filename",
             description="Keep Input Filename",
             value=False,
             uid=[0],
-            enabled=lambda node: node.outputTaggedImage.value,
         ),
         desc.ChoiceParam(
             name="extension",
             label="Output File Extension",
-            description="Output image file extension",
-            value="jpg",
-            values=["png", "jpg"],
+            description="Output image file extension.\n"
+                        "If unset, the output file extension will match the input's if possible.",
+            value="exr",
+            values=["exr", "png", "jpg"],
             exclusive=True,
             uid=[0],
-            enabled=lambda node: node.outputTaggedImage.value,
             group='', # remove from command line params
         ),
         desc.ChoiceParam(
@@ -75,15 +83,15 @@ Generate a set of tags corresponding to recognized elements using a recognition 
     outputs = [
         desc.File(
             name="output",
-            label="Result Folder",
-            description="Output path for the resulting images.",
+            label="Masks Folder",
+            description="Output path for the masks.",
             value=desc.Node.internalFolder,
             uid=[],
         ),
         desc.File(
-            name="results",
-            label="Results",
-            description="Generated images.",
+            name="masks",
+            label="Masks",
+            description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
@@ -91,7 +99,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
         ),
     ]
 
-    def resolvedPaths(self, inputSfm, outDir, keepFilename, ext):
+    def resolvedPaths(self, inputSfm, outDir, keepFilename):
         import pyalicevision as av
         from pathlib import Path
 
@@ -102,11 +110,11 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             for id, v in views.items():
                 inputFile = v.getImage().getImagePath()
                 if keepFilename:
-                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + '.' + ext)
-                    outputFileBoxes = os.path.join(outDir, Path(inputFile).stem + "_bboxes" + '.jpg')
+                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + '.exr')
+                    outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + '.jpg')
                 else:
-                    outputFileMask = os.path.join(outDir, str(id) + '.' + ext)
-                    outputFileBoxes = os.path.join(outDir, str(id) + "_bboxes" + '.jpg')
+                    outputFileMask = os.path.join(outDir, str(id) + '.exr')
+                    outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + '.exr')
                 paths[inputFile] = (outputFileMask, outputFileBoxes)
 
         return paths
@@ -114,6 +122,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
     def processChunk(self, chunk):
         import json
         from segmentationRDS import image, segmentation
+        import numpy as np
         import torch
 
         try:
@@ -122,52 +131,42 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             if not chunk.node.input:
                 chunk.logger.warning('Nothing to segment')
                 return
+            if not chunk.node.bboxFolder.value:
+                chunk.logger.warning('No folder containing bounded boxes')
+                return
             if not chunk.node.output.value:
                 return
 
             chunk.logger.info('Chunk range from {} to {}'.format(chunk.range.start, chunk.range.last))
 
-            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extension.value)
+            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value)
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            os.environ['TOKENIZERS_PARALLELISM'] = 'true' # required to avoid warning on tokenizers
+            processor = segmentation.segmentAnything(SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.value,
+                                                     useGPU = chunk.node.useGpu.value)
 
-            processor = segmentation.recognizeAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
-                                                       useGPU = chunk.node.useGpu.value)
-
-            dict = {}
+            bboxDict = {}
+            for file in os.listdir(chunk.node.bboxFolder.value):
+                if file.endswith('.json'):
+                    with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
+                        bb = json.load(bboxFile)
+                        bboxDict.update(bb)
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img, PAR = image.loadImage(iFile, True)
-                    tags = processor.get_tags(image = img)
+                    img, PAR = image.loadImage(iFile)
+                    bboxes = np.asarray(bboxDict[iFile]['bboxes'])
 
-                    chunk.logger.debug('image: {}'.format(iFile))
-                    chunk.logger.debug('PAR: {}'.format(PAR))
-                    chunk.logger.debug('tags: {}'.format(tags))
+                    mask = processor.process(image = img,
+                                             bboxes = bboxes,
+                                             clicksIn = [],
+                                             clicksOut = [],
+                                             invert = chunk.node.maskInvert.value,
+                                             verbose = False)
 
-                    imgInfo = {}
-                    imgInfo['tags'] = tags
-                    dict[iFile] = imgInfo
-
-                    if (chunk.node.outputTaggedImage.value):
-                        imgTags = (img * 255.0).astype('uint8')
-                        h,w,c = imgTags.shape
-                        txtSize = h // 25
-                        for i,tag in enumerate(tags):
-                            x = 60 + (i // 12)*(w // 3)
-                            y = txtSize + 2*(i%12)*txtSize
-                            imgTags = image.addText(imgTags, tag, x, y, txtSize)
-
-                        image.writeImage(oFile[0], imgTags, PAR)
-
-            jsonFilename = chunk.node.output.value + "/tags." + str(chunk.index) + ".json"
-            jsonObject = json.dumps(dict, indent = 4)
-            outfile =  open(jsonFilename, 'w')
-            outfile.write(jsonObject)
-            outfile.close()
+                    image.writeImage(oFile[0], mask, PAR)
 
             del processor
             torch.cuda.empty_cache()
@@ -176,6 +175,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             chunk.logManager.end()
 
     def stopProcess(sel, chunk):
+        # torch.cuda.empty_cache()
         try:
             del processor
         except:

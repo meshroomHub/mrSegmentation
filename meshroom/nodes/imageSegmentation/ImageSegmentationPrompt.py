@@ -1,10 +1,6 @@
-from __future__ import print_function
-
 __version__ = "0.1"
 
 from meshroom.core import desc
-# import distutils.dir_util as du
-# import shutil
 import os
 
 

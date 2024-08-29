@@ -219,38 +219,6 @@ class segmentAnything:
 
         return np.array(result_masks)
 
-        # point_coords = self.sam_predictor.transform.apply_coords(point_coords, image_uint8.shape[:2])
-        # coords_torch = torch.as_tensor(point_coords, dtype=torch.float, device=self.sam_predictor.device)
-        # labels_torch = torch.as_tensor(point_labels, dtype=torch.int, device=self.sam_predictor.device)
-        # coords_torch = coords_torch[None, :, :]
-        # labels_torch = labels_torch[None, :]
-
-        # input_boxes = torch.tensor(xyxy, device=self.sam_predictor.device)
-        # box_torch = self.sam_predictor.transform.apply_boxes_torch(input_boxes, image_uint8.shape[:2])
-
-        # masks, _, _ = self.sam_predictor.predict_torch(
-        #     point_coords=coords_torch,#None,#
-        #     point_labels=labels_torch,#None,#
-        #     boxes=box_torch,#None,
-        #     multimask_output=False,
-        # )
-
-        # print(masks.shape)
-
-        # result_masks = np.array(masks.cpu())
-        # b,_,h,w = result_masks.shape
-        # result_masks = result_masks.reshape(b,h,w)
-        # return result_masks
-
-        # masks, _, _ = self.sam_predictor.predict(
-        #     point_coords=point_coords,#None,
-        #     point_labels=point_labels,#None,
-        #     box=None,
-        #     multimask_output=False,
-        # )
-
-        # return masks
-
     def process(self, image: np.ndarray, bboxes = [], clicksIn: np.ndarray = [], clicksOut: np.ndarray = [], invert: bool = False, verbose: bool = False) -> np.ndarray:
         if len(clicksIn):
             point_coords = clicksIn
