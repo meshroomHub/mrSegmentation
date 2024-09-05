@@ -29,35 +29,30 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             label="Input",
             description="SfMData file input.",
             value="",
-            uid=[0],
         ),
         desc.File(
             name="recognitionModelPath",
             label="Recognition Model",
             description="Weights file for the recognition model.",
             value=os.getenv('RDS_RECOGNITION_MODEL_PATH',""),
-            uid=[0],
         ),
         desc.File(
             name="detectionModelPath",
             label="Detection Model",
             description="Weights file for the detection model.",
             value=os.getenv('RDS_DETECTION_MODEL_PATH',""),
-            uid=[0],
         ),
         desc.File(
             name="detectionConfigPath",
             label="Detection Config",
             description="Config file for the detection model.",
             value=os.getenv('RDS_DETECTION_CONFIG_PATH',""),
-            uid=[0],
         ),
         desc.File(
             name="segmentationModelPath",
             label="Segmentation Model",
             description="Weights file for the segmentation model.",
             value=os.getenv('RDS_SEGMENTATION_MODEL_PATH',""),
-            uid=[0],
         ),
         desc.StringParam(
             name="prompt",
@@ -65,7 +60,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             description="What to segment, separated by point or one item per line",
             value="person",
             semantic="multiline",
-            uid=[0],
         ),
         desc.StringParam(
             name="synonyms",
@@ -73,14 +67,12 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             description="Synonyms to prompt separated by commas or one item per line. eg: man,woman,boy,girl,human,people can be used as synonyms of person",
             value="man\nwoman\nboy\ngirl\nhuman\npeople",
             semantic="multiline",
-            uid=[0],
         ),
         desc.BoolParam(
             name="forceDetection",
             label="Force Detection",
             description="Launch detection step even if nor the prompt neither any synonyms are recognized",
             value=False,
-            uid=[0],
         ),
         desc.FloatParam(
             name="thresholdDetection",
@@ -88,7 +80,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             description="Threshold for detection, the lower the more sensitive the detector",
             range=(0.0,1.0,0.1),
             value=0.2,
-            uid=[0],
         ),
         desc.IntParam(
             name="bboxMargin",
@@ -96,28 +87,25 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             description="Increase bounded box dimensions by the selected percentage",
             range=(0,100,1),
             value=0,
-            uid=[0],
         ),
         desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
             description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
             value=False,
-            uid=[0],
         ),
         desc.BoolParam(
             name="useGpu",
             label="Use GPU",
             description="Use GPU for computation if available",
             value=True,
-            uid=[],
+            invalidate=False,
         ),
         desc.BoolParam(
             name="keepFilename",
             label="Keep Filename",
             description="Keep Input Filename",
             value=False,
-            uid=[0],
         ),
         desc.ChoiceParam(
             name="extension",
@@ -127,7 +115,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            uid=[0],
             group='', # remove from command line params
         ),
         desc.BoolParam(
@@ -135,7 +122,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             label="Output Bounded Box Image",
             description="Write source image with bounded boxes baked in.",
             value=False,
-            uid=[0],
         ),
         desc.ChoiceParam(
             name="verboseLevel",
@@ -144,7 +130,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             value="info",
             values=["fatal", "error", "warning", "info", "debug"],
             exclusive=True,
-            uid=[],
         )
     ]
 
@@ -154,7 +139,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             label="Masks Folder",
             description="Output path for the masks.",
             value=desc.Node.internalFolder,
-            uid=[],
         ),
         desc.File(
             name="masks",
@@ -163,7 +147,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             semantic="image",
             value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
-            uid=[],
         ),
     ]
 
