@@ -19,35 +19,31 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             label="Input",
             description="SfMData file input.",
             value="",
-            uid=[0],
         ),
         desc.File(
             name="recognitionModelPath",
             label="Recognition Model",
             description="Weights file for the recognition model.",
             value=os.getenv('RDS_RECOGNITION_MODEL_PATH',""),
-            uid=[0],
         ),
         desc.BoolParam(
             name="useGpu",
             label="Use GPU",
             description="Use GPU for computation if available",
             value=True,
-            uid=[],
+            invalidate=False,
         ),
         desc.BoolParam(
             name="outputTaggedImage",
             label="Output Tagged Image",
             description="Write source image with tags baked in.",
             value=False,
-            uid=[0],
         ),
         desc.BoolParam(
             name="keepFilename",
             label="Keep Filename",
             description="Keep Input Filename",
             value=False,
-            uid=[0],
             enabled=lambda node: node.outputTaggedImage.value,
         ),
         desc.ChoiceParam(
@@ -57,7 +53,6 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             value="jpg",
             values=["png", "jpg"],
             exclusive=True,
-            uid=[0],
             enabled=lambda node: node.outputTaggedImage.value,
             group='', # remove from command line params
         ),
@@ -68,7 +63,6 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             value="info",
             values=["fatal", "error", "warning", "info", "debug"],
             exclusive=True,
-            uid=[],
         )
     ]
 
@@ -78,7 +72,6 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             label="Result Folder",
             description="Output path for the resulting images.",
             value=desc.Node.internalFolder,
-            uid=[],
         ),
         desc.File(
             name="results",
@@ -87,7 +80,6 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             semantic="image",
             value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
-            uid=[],
         ),
     ]
 

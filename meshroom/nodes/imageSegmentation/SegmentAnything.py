@@ -21,42 +21,37 @@ Based on the Segment Anything model.
             label="Input",
             description="SfMData file input.",
             value="",
-            uid=[0],
         ),
         desc.File(
             name="bboxFolder",
             label="BBoxes Folfer",
             description="JSON file containing prompting bounded boxes.",
             value="",
-            uid=[0],
         ),
         desc.File(
             name="segmentationModelPath",
             label="Segmentation Model",
             description="Weights file for the segmentation model.",
             value=os.getenv('RDS_SEGMENTATION_MODEL_PATH'),
-            uid=[0],
         ),
         desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
             description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
             value=False,
-            uid=[0],
         ),
         desc.BoolParam(
             name="useGpu",
             label="Use GPU",
             description="Use GPU for computation if available",
             value=True,
-            uid=[],
+            invalidate=False,
         ),
         desc.BoolParam(
             name="keepFilename",
             label="Keep Filename",
             description="Keep Input Filename",
             value=False,
-            uid=[0],
         ),
         desc.ChoiceParam(
             name="extension",
@@ -66,7 +61,6 @@ Based on the Segment Anything model.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            uid=[0],
             group='', # remove from command line params
         ),
         desc.ChoiceParam(
@@ -76,7 +70,6 @@ Based on the Segment Anything model.
             value="info",
             values=["fatal", "error", "warning", "info", "debug"],
             exclusive=True,
-            uid=[],
         )
     ]
 
@@ -86,7 +79,6 @@ Based on the Segment Anything model.
             label="Masks Folder",
             description="Output path for the masks.",
             value=desc.Node.internalFolder,
-            uid=[],
         ),
         desc.File(
             name="masks",
@@ -95,7 +87,6 @@ Based on the Segment Anything model.
             semantic="image",
             value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
-            uid=[],
         ),
     ]
 
