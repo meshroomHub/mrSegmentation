@@ -58,10 +58,10 @@ def loadImage(imagePath: str, applyPAR: bool = False, incolorspace: str = 'acesc
     oiio_spec = oiio_input.spec ()
     oiio_image = oiio_input.read_image(0, 3)
     pixelAspectRatio = oiio_spec.get_float_attribute('PixelAspectRatio', 1.0)
+    h,w,c = oiio_image.shape
 
     if pixelAspectRatio != 1.0 and applyPAR:
         oiio_image_buf = oiio.ImageBuf(oiio_image)
-        h,w,c = oiio_image.shape
         nh = int(float(h) / pixelAspectRatio)
         oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w, 0, nh, 0, 1, 0, c+1))
         oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
@@ -79,19 +79,21 @@ def loadImage(imagePath: str, applyPAR: bool = False, incolorspace: str = 'acesc
 
     oiio_input.close()
 
-    return (oiio_image, pixelAspectRatio)
+    return (oiio_image, h, w, pixelAspectRatio)
 
-def writeImage(imagePath: str, image: np.ndarray, pixelAspectRatio: float = 1.0) -> None:
+def writeImage(imagePath: str, image: np.ndarray, h_tgt: int, w_tgt: int, pixelAspectRatio: float = 1.0) -> None:
     h,w,c = image.shape
-    if pixelAspectRatio != 1.0:
+    if h != h_tgt or w != w_tgt:
         oiio_image_buf = oiio.ImageBuf(image)
-        h = int(float(h) * pixelAspectRatio)
-        oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w, 0, h, 0, 1, 0, c+1))
+        oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w_tgt, 0, h_tgt, 0, 1, 0, c+1))
         image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
+        w = w_tgt
+        h = h_tgt
     output_image = oiio.ImageOutput.create(imagePath)
     output_image_spec = oiio.ImageSpec(w, h, c, oiio.UINT8)
     if imagePath[-4:].lower() == ".exr":
         output_image_spec.attribute('compression', 'zips') # required to get zip (1 scanline) compression method
+    output_image_spec.attribute('pixelAspectRatio', pixelAspectRatio)
     output_image.open(imagePath, output_image_spec)
 
     output_image.write_image(image)
