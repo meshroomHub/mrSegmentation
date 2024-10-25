@@ -147,9 +147,12 @@ Based on the Segment Anything model.
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img, h_ori, w_ori, PAR = image.loadImage(iFile)
+                    img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
                     bboxes = np.asarray(bboxDict[iFile]['bboxes'])
 
+                    chunk.logger.info('image: {}'.format(iFile))
+                    chunk.logger.debug('bboxes: {}'.format(bboxDict[iFile]['bboxes']))
+                    
                     mask = processor.process(image = img,
                                              bboxes = bboxes,
                                              clicksIn = [],
@@ -157,8 +160,6 @@ Based on the Segment Anything model.
                                              invert = chunk.node.maskInvert.value,
                                              verbose = False)
 
-                    chunk.logger.info('image: {}'.format(iFile))
-                    
                     image.writeImage(oFile[0], mask, h_ori, w_ori, PAR)
 
             del processor
