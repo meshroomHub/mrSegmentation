@@ -42,7 +42,7 @@ def cleanstr(s: str) -> str:
     return sclean
 
 
-class segmentationRDS:
+class SegmentationRDS:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, GD_CONFIG_PATH:str, GD_CHECKPOINT_PATH:str, SAM_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, SAM_ENCODER_VERSION:str='vit_h', useGPU:bool=True):
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
@@ -185,7 +185,7 @@ class segmentationRDS:
             return ((mask_image[:,:,0:1] > 0).astype('float32'), bboxes, tags)
 
 
-class segmentAnything:
+class SegmentAnything:
 
     def __init__(self, SAM_CHECKPOINT_PATH:str, SAM_ENCODER_VERSION:str='vit_h', useGPU:bool=True):
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
@@ -244,7 +244,7 @@ class segmentAnything:
         else:
             return (mask_image[:,:,0:1] > 0).astype('float32')
 
-class recognizeAnything:
+class RecognizeAnything:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
@@ -276,7 +276,7 @@ class recognizeAnything:
 
         return tags
 
-class detectAnything:
+class DetectAnything:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, GD_CONFIG_PATH:str, GD_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'

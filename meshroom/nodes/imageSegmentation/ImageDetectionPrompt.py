@@ -177,7 +177,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
 
             os.environ['TOKENIZERS_PARALLELISM'] = 'true' # required to avoid warning on tokenizers
 
-            processor = segmentation.detectAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
+            processor = segmentation.DetectAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
                                                     GD_CONFIG_PATH = chunk.node.detectionConfigPath.value,
                                                     GD_CHECKPOINT_PATH = chunk.node.detectionModelPath.value,
                                                     useGPU = chunk.node.useGpu.value)

@@ -135,7 +135,7 @@ Based on the Segment Anything model.
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            processor = segmentation.segmentAnything(SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.value,
+            processor = segmentation.SegmentAnything(SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.value,
                                                      useGPU = chunk.node.useGpu.value)
 
             bboxDict = {}
