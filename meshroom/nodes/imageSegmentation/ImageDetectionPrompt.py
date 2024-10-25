@@ -4,18 +4,17 @@ from meshroom.core import desc
 import os
 
 
-class ImageSegmentationPrompt(desc.Node):
+class ImageDetectionPrompt(desc.Node):
     size = desc.DynamicNodeSize('input')
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
     category = 'Utils'
     documentation = '''
-Generate a binary mask corresponding to the input text prompt.
+Generate bounded boxes corresponding to the input text prompt.
 First a recognition model (image to tags) is launched on the input image.
 If the prompt or a synonym is detected in the returned list of tags the detection model (tag to bounded box) is launched.
 Detection can be forced by setting to True the appropriate parameter.
-If at least one bounded box is returned the segmentation model (bounded box to binary mask) is launched.
 Bounded box sizes can be increased by a ratio from 0 to 100%
 '''
 
@@ -43,12 +42,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             label="Detection Config",
             description="Config file for the detection model.",
             value=os.getenv('RDS_DETECTION_CONFIG_PATH',""),
-        ),
-        desc.File(
-            name="segmentationModelPath",
-            label="Segmentation Model",
-            description="Weights file for the segmentation model.",
-            value=os.getenv('RDS_SEGMENTATION_MODEL_PATH',""),
         ),
         desc.StringParam(
             name="prompt",
@@ -85,12 +78,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             value=0,
         ),
         desc.BoolParam(
-            name="maskInvert",
-            label="Invert Masks",
-            description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
-            value=False,
-        ),
-        desc.BoolParam(
             name="useGpu",
             label="Use GPU",
             description="Use GPU for computation if available",
@@ -98,26 +85,27 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             invalidate=False,
         ),
         desc.BoolParam(
-            name="keepFilename",
-            label="Keep Filename",
-            description="Keep Input Filename",
-            value=False,
-        ),
-        desc.ChoiceParam(
-            name="extension",
-            label="Output File Extension",
-            description="Output image file extension.\n"
-                        "If unset, the output file extension will match the input's if possible.",
-            value="exr",
-            values=["exr", "png", "jpg"],
-            exclusive=True,
-            group='', # remove from command line params
-        ),
-        desc.BoolParam(
             name="outputBboxImage",
             label="Output Bounded Box Image",
             description="Write source image with bounded boxes baked in.",
             value=False,
+        ),
+        desc.BoolParam(
+            name="keepFilename",
+            label="Keep Filename",
+            description="Keep Input Filename",
+            value=False,
+            enabled=lambda node: node.outputBboxImage.value,
+        ),
+        desc.ChoiceParam(
+            name="extension",
+            label="Output File Extension",
+            description="Output image file extension.",
+            value="jpg",
+            values=["png", "jpg"],
+            exclusive=True,
+            enabled=lambda node: node.outputBboxImage.value,
+            group='', # remove from command line params
         ),
         desc.ChoiceParam(
             name="verboseLevel",
@@ -132,14 +120,14 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
     outputs = [
         desc.File(
             name="output",
-            label="Masks Folder",
-            description="Output path for the masks.",
+            label="BBox Folder",
+            description="Output path for the bounded boxes.",
             value=desc.Node.internalFolder,
         ),
         desc.File(
-            name="masks",
-            label="Masks",
-            description="Generated segmentation masks.",
+            name="bboxes",
+            label="BBoxes",
+            description="Generated images with bounded boxes baked in.",
             semantic="image",
             value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
@@ -167,7 +155,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
         return paths
 
     def processChunk(self, chunk):
-        # import json
+        import json
         from segmentationRDS import image, segmentation
         import torch
 
@@ -189,40 +177,53 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
 
             os.environ['TOKENIZERS_PARALLELISM'] = 'true' # required to avoid warning on tokenizers
 
-            processor = segmentation.SegmentationRDS(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
-                                                     GD_CONFIG_PATH = chunk.node.detectionConfigPath.value,
-                                                     GD_CHECKPOINT_PATH = chunk.node.detectionModelPath.value,
-                                                     SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.value,
-                                                     useGPU = chunk.node.useGpu.value)
+            processor = segmentation.DetectAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
+                                                    GD_CONFIG_PATH = chunk.node.detectionConfigPath.value,
+                                                    GD_CHECKPOINT_PATH = chunk.node.detectionModelPath.value,
+                                                    useGPU = chunk.node.useGpu.value)
 
             prompt = chunk.node.prompt.value.replace('\n','.')
             chunk.logger.debug('prompt: {}'.format(prompt))
             synonyms = chunk.node.synonyms.value.replace('\n',',')
             chunk.logger.debug('synonyms: {}'.format(synonyms))
 
+            dict = {}
+
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
                     img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
-                    mask, bboxes, tags = processor.process(image = img,
+                    bboxes, conf, tags = processor.process(image = img,
                                                            prompt = chunk.node.prompt.value,
                                                            synonyms = chunk.node.synonyms.value,
                                                            threshold = chunk.node.thresholdDetection.value,
                                                            force = chunk.node.forceDetection.value,
                                                            bboxMargin = chunk.node.bboxMargin.value,
-                                                           invert = chunk.node.maskInvert.value,
                                                            verbose = False)
 
                     chunk.logger.info('image: {}'.format(iFile))
                     chunk.logger.debug('tags: {}'.format(tags))
                     chunk.logger.debug('bboxes: {}'.format(bboxes))
+                    chunk.logger.debug('confidence: {}'.format(conf))
 
-                    image.writeImage(oFile[0], mask, h_ori, w_ori, PAR)
+                    imgInfo = {}
+                    imgInfo['bboxes'] = bboxes.tolist()
+                    imgInfo['confidence'] = conf.tolist()
+                    imgInfo['tags'] = tags
+                    imgInfo['prompt'] = prompt.split('.')
+                    imgInfo['synonyms'] = synonyms.split(',')
+                    dict[iFile] = imgInfo
 
                     if (chunk.node.outputBboxImage.value):
                         imgBoxes = (img * 255.0).astype('uint8')
                         for bbox in bboxes:
                             imgBoxes = image.addRectangle(imgBoxes, bbox)
-                        image.writeImage(oFile[1], imgBoxes, h_ori, w_ori, PAR)
+                        image.writeImage(oFile[0], imgBoxes, h_ori, w_ori, PAR)
+
+            jsonFilename = chunk.node.output.value + "/bboxes." + str(chunk.index) + ".json"
+            jsonObject = json.dumps(dict, indent = 4)
+            outfile =  open(jsonFilename, 'w')
+            outfile.write(jsonObject)
+            outfile.close()
 
             del processor
             torch.cuda.empty_cache()
