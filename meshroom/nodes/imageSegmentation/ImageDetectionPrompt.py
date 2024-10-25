@@ -191,7 +191,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img, PAR = image.loadImage(iFile, True)
+                    img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
                     bboxes, conf, tags = processor.process(image = img,
                                                            prompt = chunk.node.prompt.value,
                                                            synonyms = chunk.node.synonyms.value,
@@ -217,7 +217,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
                         imgBoxes = (img * 255.0).astype('uint8')
                         for bbox in bboxes:
                             imgBoxes = image.addRectangle(imgBoxes, bbox)
-                        image.writeImage(oFile[0], imgBoxes, PAR)
+                        image.writeImage(oFile[0], imgBoxes, h_ori, w_ori, PAR)
 
             jsonFilename = chunk.node.output.value + "/bboxes." + str(chunk.index) + ".json"
             jsonObject = json.dumps(dict, indent = 4)

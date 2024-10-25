@@ -133,7 +133,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img, PAR = image.loadImage(iFile, True)
+                    img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
                     tags = processor.get_tags(image = img)
 
                     chunk.logger.debug('image: {}'.format(iFile))
@@ -153,7 +153,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
                             y = txtSize + 2*(i%12)*txtSize
                             imgTags = image.addText(imgTags, tag, x, y, txtSize)
 
-                        image.writeImage(oFile[0], imgTags, PAR)
+                        image.writeImage(oFile[0], imgTags, h_ori, w_ori, PAR)
 
             jsonFilename = chunk.node.output.value + "/tags." + str(chunk.index) + ".json"
             jsonObject = json.dumps(dict, indent = 4)

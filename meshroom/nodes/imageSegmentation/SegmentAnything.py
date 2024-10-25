@@ -147,7 +147,7 @@ Based on the Segment Anything model.
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img, PAR = image.loadImage(iFile)
+                    img, h_ori, w_ori, PAR = image.loadImage(iFile)
                     bboxes = np.asarray(bboxDict[iFile]['bboxes'])
 
                     mask = processor.process(image = img,
@@ -157,7 +157,7 @@ Based on the Segment Anything model.
                                              invert = chunk.node.maskInvert.value,
                                              verbose = False)
 
-                    image.writeImage(oFile[0], mask, PAR)
+                    image.writeImage(oFile[0], mask, h_ori, w_ori, PAR)
 
             del processor
             torch.cuda.empty_cache()
