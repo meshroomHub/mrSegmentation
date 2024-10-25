@@ -373,7 +373,8 @@ class DetectAnything:
             print("wordlist: {}".format(wordlist))
 
         recoOK, tags = self.recognize(wordlist, image, verbose)
-        bboxes = []
+        bboxes = np.array([])
+        confidence = np.array([])
         if recoOK or force:
             bboxes, confidence = self.detect(image=image, TEXT_PROMPT=prompt, BOX_THRESHOLD=threshold)
             if bboxMargin > 0:

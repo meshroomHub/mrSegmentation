@@ -200,7 +200,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
                                                            bboxMargin = chunk.node.bboxMargin.value,
                                                            verbose = False)
 
-                    chunk.logger.debug('image: {}'.format(iFile))
+                    chunk.logger.info('image: {}'.format(iFile))
                     chunk.logger.debug('tags: {}'.format(tags))
                     chunk.logger.debug('bboxes: {}'.format(bboxes))
                     chunk.logger.debug('confidence: {}'.format(conf))

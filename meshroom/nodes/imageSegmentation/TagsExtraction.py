@@ -136,7 +136,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
                     img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
                     tags = processor.get_tags(image = img)
 
-                    chunk.logger.debug('image: {}'.format(iFile))
+                    chunk.logger.info('image: {}'.format(iFile))
                     chunk.logger.debug('PAR: {}'.format(PAR))
                     chunk.logger.debug('tags: {}'.format(tags))
 

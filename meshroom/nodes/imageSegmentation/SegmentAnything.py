@@ -157,6 +157,8 @@ Based on the Segment Anything model.
                                              invert = chunk.node.maskInvert.value,
                                              verbose = False)
 
+                    chunk.logger.info('image: {}'.format(iFile))
+                    
                     image.writeImage(oFile[0], mask, h_ori, w_ori, PAR)
 
             del processor
