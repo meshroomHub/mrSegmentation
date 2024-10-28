@@ -1,19 +1,21 @@
 __version__ = "0.1"
 
-from meshroom.core import desc
 import os
+
+from meshroom.core import desc
+from meshroom.core.utils import VERBOSE_LEVEL
 
 
 class ImageSegmentationBox(desc.Node):
-    size = desc.DynamicNodeSize('input')
+    size = desc.DynamicNodeSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
-    category = 'Utils'
-    documentation = '''
+    category = "Utils"
+    documentation = """
 Generate a binary mask from an input bounded box and points.
 Based on the Segment Anything model.
-'''
+"""
 
     inputs = [
         desc.File(
@@ -43,14 +45,14 @@ Based on the Segment Anything model.
         desc.BoolParam(
             name="useGpu",
             label="Use GPU",
-            description="Use GPU for computation if available",
+            description="Use GPU for computation if available.",
             value=True,
             invalidate=False,
         ),
         desc.BoolParam(
             name="keepFilename",
             label="Keep Filename",
-            description="Keep Input Filename",
+            description="Keep the filename of the inputs for the outputs.",
             value=False,
         ),
         desc.ChoiceParam(
@@ -61,16 +63,16 @@ Based on the Segment Anything model.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group='', # remove from command line params
+            group="",  # remove from command line params
         ),
         desc.ChoiceParam(
             name="verboseLevel",
             label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
-            values=["fatal", "error", "warning", "info", "debug"],
+            values=VERBOSE_LEVEL,
             exclusive=True,
-        )
+        ),
     ]
 
     outputs = [
@@ -101,11 +103,11 @@ Based on the Segment Anything model.
             for id, v in views.items():
                 inputFile = v.getImage().getImagePath()
                 if keepFilename:
-                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + '.exr')
-                    outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + '.jpg')
+                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + ".exr")
+                    outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
                 else:
-                    outputFileMask = os.path.join(outDir, str(id) + '.exr')
-                    outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + '.exr')
+                    outputFileMask = os.path.join(outDir, str(id) + ".exr")
+                    outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".exr")
                 paths[inputFile] = (outputFileMask, outputFileBoxes)
 
         return paths
@@ -120,15 +122,15 @@ Based on the Segment Anything model.
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
             if not chunk.node.input:
-                chunk.logger.warning('Nothing to segment')
+                chunk.logger.warning("Nothing to segment")
                 return
             if not chunk.node.bboxFolder.value:
-                chunk.logger.warning('No folder containing bounded boxes')
+                chunk.logger.warning("No folder containing bounded boxes")
                 return
             if not chunk.node.output.value:
                 return
 
-            chunk.logger.info('Chunk range from {} to {}'.format(chunk.range.start, chunk.range.last))
+            chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
             outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value)
 
@@ -140,7 +142,7 @@ Based on the Segment Anything model.
 
             bboxDict = {}
             for file in os.listdir(chunk.node.bboxFolder.value):
-                if file.endswith('.json'):
+                if file.endswith(".json"):
                     with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
                         bb = json.load(bboxFile)
                         bboxDict.update(bb)
@@ -148,10 +150,10 @@ Based on the Segment Anything model.
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
                     img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
-                    bboxes = np.asarray(bboxDict[iFile]['bboxes'])
+                    bboxes = np.asarray(bboxDict[iFile]["bboxes"])
 
-                    chunk.logger.info('image: {}'.format(iFile))
-                    chunk.logger.debug('bboxes: {}'.format(bboxDict[iFile]['bboxes']))
+                    chunk.logger.info("image: {}".format(iFile))
+                    chunk.logger.debug("bboxes: {}".format(bboxDict[iFile]["bboxes"]))
                     
                     mask = processor.process(image = img,
                                              bboxes = bboxes,
