@@ -32,7 +32,7 @@ Based on the Segment Anything model.
             name="segmentationModelPath",
             label="Segmentation Model",
             description="Weights file for the segmentation model.",
-            value=os.getenv('RDS_SEGMENTATION_MODEL_PATH'),
+            value=os.getenv("RDS_SEGMENTATION_MODEL_PATH", ""),
         ),
         desc.BoolParam(
             name="maskInvert",
