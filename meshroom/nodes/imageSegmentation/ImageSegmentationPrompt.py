@@ -1,23 +1,25 @@
 __version__ = "0.1"
 
-from meshroom.core import desc
 import os
+
+from meshroom.core import desc
+from meshroom.core.utils import VERBOSE_LEVEL
 
 
 class ImageSegmentationPrompt(desc.Node):
-    size = desc.DynamicNodeSize('input')
+    size = desc.DynamicNodeSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
-    category = 'Utils'
-    documentation = '''
+    category = "Utils"
+    documentation = """
 Generate a binary mask corresponding to the input text prompt.
 First a recognition model (image to tags) is launched on the input image.
 If the prompt or a synonym is detected in the returned list of tags the detection model (tag to bounded box) is launched.
 Detection can be forced by setting to True the appropriate parameter.
 If at least one bounded box is returned the segmentation model (bounded box to binary mask) is launched.
-Bounded box sizes can be increased by a ratio from 0 to 100%
-'''
+Bounded box sizes can be increased by a ratio from 0 to 100%.
+"""
 
     inputs = [
         desc.File(
@@ -30,58 +32,58 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             name="recognitionModelPath",
             label="Recognition Model",
             description="Weights file for the recognition model.",
-            value=os.getenv('RDS_RECOGNITION_MODEL_PATH',""),
+            value=os.getenv("RDS_RECOGNITION_MODEL_PATH", ""),
         ),
         desc.File(
             name="detectionModelPath",
             label="Detection Model",
             description="Weights file for the detection model.",
-            value=os.getenv('RDS_DETECTION_MODEL_PATH',""),
+            value=os.getenv("RDS_DETECTION_MODEL_PATH", ""),
         ),
         desc.File(
             name="detectionConfigPath",
             label="Detection Config",
             description="Config file for the detection model.",
-            value=os.getenv('RDS_DETECTION_CONFIG_PATH',""),
+            value=os.getenv("RDS_DETECTION_CONFIG_PATH", ""),
         ),
         desc.File(
             name="segmentationModelPath",
             label="Segmentation Model",
             description="Weights file for the segmentation model.",
-            value=os.getenv('RDS_SEGMENTATION_MODEL_PATH',""),
+            value=os.getenv("RDS_SEGMENTATION_MODEL_PATH", ""),
         ),
         desc.StringParam(
             name="prompt",
             label="Prompt",
-            description="What to segment, separated by point or one item per line",
+            description="What to segment, separated by point or one item per line.",
             value="person",
             semantic="multiline",
         ),
         desc.StringParam(
             name="synonyms",
             label="Synonyms",
-            description="Synonyms to prompt separated by commas or one item per line. eg: man,woman,boy,girl,human,people can be used as synonyms of person",
+            description="Synonyms to prompt separated by commas or one item per line. eg: man,woman,boy,girl,human,people can be used as synonyms of person.",
             value="man\nwoman\nboy\ngirl\nhuman\npeople",
             semantic="multiline",
         ),
         desc.BoolParam(
             name="forceDetection",
             label="Force Detection",
-            description="Launch detection step even if nor the prompt neither any synonyms are recognized",
+            description="Launch detection step even if neither the prompt nor any synonym is recognized.",
             value=False,
         ),
         desc.FloatParam(
             name="thresholdDetection",
             label="Threshold Detection",
-            description="Threshold for detection, the lower the more sensitive the detector",
-            range=(0.0,1.0,0.1),
+            description="Threshold for detection. The lower it is, the more sensitive the detector.",
+            range=(0.0, 1.0, 0.1),
             value=0.2,
         ),
         desc.IntParam(
             name="bboxMargin",
             label="Detection Margin",
-            description="Increase bounded box dimensions by the selected percentage",
-            range=(0,100,1),
+            description="Increase bounded box dimensions by the selected percentage.",
+            range=(0, 100, 1),
             value=0,
         ),
         desc.BoolParam(
@@ -93,14 +95,14 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
         desc.BoolParam(
             name="useGpu",
             label="Use GPU",
-            description="Use GPU for computation if available",
+            description="Use GPU for computation if available.",
             value=True,
             invalidate=False,
         ),
         desc.BoolParam(
             name="keepFilename",
             label="Keep Filename",
-            description="Keep Input Filename",
+            description="Keep the filename of the inputs for the outputs.",
             value=False,
         ),
         desc.ChoiceParam(
@@ -111,7 +113,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group='', # remove from command line params
+            group="",  # remove from command line params
         ),
         desc.BoolParam(
             name="outputBboxImage",
@@ -124,9 +126,9 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
-            values=["fatal", "error", "warning", "info", "debug"],
+            values=VERBOSE_LEVEL,
             exclusive=True,
-        )
+        ),
     ]
 
     outputs = [
@@ -157,17 +159,16 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             for id, v in views.items():
                 inputFile = v.getImage().getImagePath()
                 if keepFilename:
-                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + '.' + ext)
-                    outputFileBoxes = os.path.join(outDir, Path(inputFile).stem + "_bboxes" + '.jpg')
+                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + ext)
+                    outputFileBoxes = os.path.join(outDir, Path(inputFile).stem + "_bboxes" + ".jpg")
                 else:
-                    outputFileMask = os.path.join(outDir, str(id) + '.' + ext)
-                    outputFileBoxes = os.path.join(outDir, str(id) + "_bboxes" + '.jpg')
+                    outputFileMask = os.path.join(outDir, str(id) + "." + ext)
+                    outputFileBoxes = os.path.join(outDir, str(id) + "_bboxes" + ".jpg")
                 paths[inputFile] = (outputFileMask, outputFileBoxes)
 
         return paths
 
     def processChunk(self, chunk):
-        # import json
         from segmentationRDS import image, segmentation
         import torch
 
@@ -175,19 +176,19 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
             if not chunk.node.input:
-                chunk.logger.warning('Nothing to segment')
+                chunk.logger.warning("Nothing to segment")
                 return
             if not chunk.node.output.value:
                 return
 
-            chunk.logger.info('Chunk range from {} to {}'.format(chunk.range.start, chunk.range.last))
+            chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
             outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extension.value)
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            os.environ['TOKENIZERS_PARALLELISM'] = 'true' # required to avoid warning on tokenizers
+            os.environ["TOKENIZERS_PARALLELISM"] = "true"  # required to avoid warning on tokenizers
 
             processor = segmentation.SegmentationRDS(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
                                                      GD_CONFIG_PATH = chunk.node.detectionConfigPath.value,
@@ -195,10 +196,10 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
                                                      SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.value,
                                                      useGPU = chunk.node.useGpu.value)
 
-            prompt = chunk.node.prompt.value.replace('\n','.')
-            chunk.logger.debug('prompt: {}'.format(prompt))
-            synonyms = chunk.node.synonyms.value.replace('\n',',')
-            chunk.logger.debug('synonyms: {}'.format(synonyms))
+            prompt = chunk.node.prompt.value.replace("\n", ".")
+            chunk.logger.debug("prompt: {}".format(prompt))
+            synonyms = chunk.node.synonyms.value.replace("\n", ",")
+            chunk.logger.debug("synonyms: {}".format(synonyms))
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
@@ -212,14 +213,14 @@ Bounded box sizes can be increased by a ratio from 0 to 100%
                                                            invert = chunk.node.maskInvert.value,
                                                            verbose = False)
 
-                    chunk.logger.info('image: {}'.format(iFile))
-                    chunk.logger.debug('tags: {}'.format(tags))
-                    chunk.logger.debug('bboxes: {}'.format(bboxes))
+                    chunk.logger.info("image: {}".format(iFile))
+                    chunk.logger.debug("tags: {}".format(tags))
+                    chunk.logger.debug("bboxes: {}".format(bboxes))
 
                     image.writeImage(oFile[0], mask, h_ori, w_ori, PAR)
 
                     if (chunk.node.outputBboxImage.value):
-                        imgBoxes = (img * 255.0).astype('uint8')
+                        imgBoxes = (img * 255.0).astype("uint8")
                         for bbox in bboxes:
                             imgBoxes = image.addRectangle(imgBoxes, bbox)
                         image.writeImage(oFile[1], imgBoxes, h_ori, w_ori, PAR)
