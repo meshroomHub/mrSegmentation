@@ -132,6 +132,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             description="Generated images with bounded boxes baked in.",
             semantic="image",
             value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
+            enabled=lambda node: node.outputBboxImage.value,
             group="",
         ),
     ]
