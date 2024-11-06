@@ -149,7 +149,7 @@ Based on the Segment Anything model.
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
+                    img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
                     bboxes = np.asarray(bboxDict[iFile]["bboxes"])
 
                     chunk.logger.info("image: {}".format(iFile))
@@ -162,7 +162,7 @@ Based on the Segment Anything model.
                                              invert = chunk.node.maskInvert.value,
                                              verbose = False)
 
-                    image.writeImage(oFile[0], mask, h_ori, w_ori, PAR)
+                    image.writeImage(oFile[0], mask, h_ori, w_ori, orientation, PAR)
 
             del processor
             torch.cuda.empty_cache()
