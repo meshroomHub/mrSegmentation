@@ -212,27 +212,28 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
-                    img, h_ori, w_ori, PAR = image.loadImage(iFile, True)
-                    mask, bboxes, tags = processor.process(image = img,
-                                                           prompt = chunk.node.prompt.value,
-                                                           synonyms = chunk.node.synonyms.value,
-                                                           threshold = chunk.node.thresholdDetection.value,
-                                                           force = chunk.node.forceDetection.value,
-                                                           bboxMargin = chunk.node.bboxMargin.value,
-                                                           invert = chunk.node.maskInvert.value,
-                                                           verbose = False)
+                    img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
+                    mask, bboxes, conf, tags = processor.process(image = img,
+                                                                 prompt = chunk.node.prompt.value,
+                                                                 synonyms = chunk.node.synonyms.value,
+                                                                 threshold = chunk.node.thresholdDetection.value,
+                                                                 force = chunk.node.forceDetection.value,
+                                                                 bboxMargin = chunk.node.bboxMargin.value,
+                                                                 invert = chunk.node.maskInvert.value,
+                                                                 verbose = False)
 
                     chunk.logger.info("image: {}".format(iFile))
                     chunk.logger.debug("tags: {}".format(tags))
                     chunk.logger.debug("bboxes: {}".format(bboxes))
+                    chunk.logger.debug("confidence: {}".format(conf))
 
-                    image.writeImage(oFile[0], mask, h_ori, w_ori, PAR)
+                    image.writeImage(oFile[0], mask, h_ori, w_ori, orientation, PAR)
 
                     if (chunk.node.outputBboxImage.value):
                         imgBoxes = (img * 255.0).astype("uint8")
                         for bbox in bboxes:
                             imgBoxes = image.addRectangle(imgBoxes, bbox)
-                        image.writeImage(oFile[1], imgBoxes, h_ori, w_ori, PAR)
+                        image.writeImage(oFile[1], imgBoxes, h_ori, w_ori, orientation, PAR)
 
             del processor
             torch.cuda.empty_cache()

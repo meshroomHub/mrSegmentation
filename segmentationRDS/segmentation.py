@@ -180,9 +180,9 @@ class SegmentationRDS:
                 mask_image[masks[idx]] = [255, 255, 255]
 
         if invert:
-            return ((mask_image[:,:,0:1] == 0).astype('float32'), bboxes, tags)
+            return ((mask_image[:,:,0:1] == 0).astype('float32'), bboxes, confidence, tags)
         else:
-            return ((mask_image[:,:,0:1] > 0).astype('float32'), bboxes, tags)
+            return ((mask_image[:,:,0:1] > 0).astype('float32'), bboxes, confidence, tags)
 
 
 class SegmentAnything:

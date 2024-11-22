@@ -53,11 +53,67 @@ def srgb_gamma_inv(x):
     else:
         return 1.055 * pow(min(1.0, x), 1.0/2.4) - 0.055
 
-def loadImage(imagePath: str, applyPAR: bool = False, incolorspace: str = 'acescg'):
+def find_metadata(oiio_spec, name: str, default):
+    values = []
+    oiio_extra_attribs = oiio_spec.extra_attribs
+    for i in range(len(oiio_extra_attribs)):
+        pos = oiio_extra_attribs[i].name.find(name)
+        if pos == 0:
+            values.insert(0, oiio_spec.getattribute(oiio_extra_attribs[i].name))
+        elif pos != -1:
+            values.append(oiio_spec.getattribute(oiio_extra_attribs[i].name))
+    if len(values) == 0:
+        values.append(default)
+    return values
+
+def apply_orientation(oiio_image, orientation, reverse: bool = False):
+    if orientation > 1:
+        oiio_image_buf = oiio.ImageBuf(oiio_image)
+        if orientation == 2:
+            oiio_image_buf = oiio.ImageBufAlgo.flop(oiio_image_buf)
+        elif orientation == 3:
+            oiio_image_buf = oiio.ImageBufAlgo.rotate180(oiio_image_buf)
+        elif orientation == 4:
+                oiio_image_buf = oiio.ImageBufAlgo.flip(oiio_image_buf)
+        elif orientation == 5:
+            if reverse:
+                oiio_image_buf = oiio.ImageBufAlgo.flop(oiio_image_buf)
+                oiio_image_buf = oiio.ImageBufAlgo.rotate270(oiio_image_buf)
+            else:
+                oiio_image_buf = oiio.ImageBufAlgo.rotate90(oiio_image_buf)
+                oiio_image_buf = oiio.ImageBufAlgo.flop(oiio_image_buf)
+        elif orientation == 6:
+            if reverse:
+                oiio_image_buf = oiio.ImageBufAlgo.rotate270(oiio_image_buf)
+            else:
+                oiio_image_buf = oiio.ImageBufAlgo.rotate90(oiio_image_buf)
+        elif orientation == 7:
+            if reverse:
+                 oiio_image_buf = oiio.ImageBufAlgo.flop(oiio_image_buf)
+                 oiio_image_buf = oiio.ImageBufAlgo.rotate90(oiio_image_buf)
+            else:
+                 oiio_image_buf = oiio.ImageBufAlgo.rotate270(oiio_image_buf)
+                 oiio_image_buf = oiio.ImageBufAlgo.flop(oiio_image_buf)
+        elif orientation == 8:
+            if reverse:
+                oiio_image_buf = oiio.ImageBufAlgo.rotate90(oiio_image_buf)
+            else:
+                oiio_image_buf = oiio.ImageBufAlgo.rotate270(oiio_image_buf)
+        oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
+    return oiio_image
+
+
+def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = True, incolorspace: str = 'acescg'):
     oiio_input = oiio.ImageInput.open(imagePath)
     oiio_spec = oiio_input.spec ()
     oiio_image = oiio_input.read_image(0, 3)
     pixelAspectRatio = oiio_spec.get_float_attribute('PixelAspectRatio', 1.0)
+    orientation = int(find_metadata(oiio_spec, 'Orientation', 1)[0])
+    oiio_spec.attribute('Orientation', orientation)
+
+    if orientation > 1:
+        oiio_image = apply_orientation(oiio_image, orientation)
+
     h,w,c = oiio_image.shape
 
     if pixelAspectRatio != 1.0 and applyPAR:
@@ -79,10 +135,17 @@ def loadImage(imagePath: str, applyPAR: bool = False, incolorspace: str = 'acesc
 
     oiio_input.close()
 
-    return (oiio_image, h, w, pixelAspectRatio)
+    return (oiio_image, h, w, pixelAspectRatio, orientation)
 
-def writeImage(imagePath: str, image: np.ndarray, h_tgt: int, w_tgt: int, pixelAspectRatio: float = 1.0) -> None:
+def writeImage(imagePath: str, image: np.ndarray, h_tgt: int, w_tgt: int, orientation: int = 1, pixelAspectRatio: float = 1.0) -> None:
+    if orientation > 1:
+        image = apply_orientation(image, orientation, reverse=True)
+        if orientation > 4:
+            tmp = h_tgt
+            h_tgt = w_tgt
+            w_tgt = tmp
     h,w,c = image.shape
+
     if h != h_tgt or w != w_tgt:
         oiio_image_buf = oiio.ImageBuf(image)
         oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w_tgt, 0, h_tgt, 0, 1, 0, c+1))
@@ -94,6 +157,7 @@ def writeImage(imagePath: str, image: np.ndarray, h_tgt: int, w_tgt: int, pixelA
     if imagePath[-4:].lower() == ".exr":
         output_image_spec.attribute('compression', 'zips') # required to get zip (1 scanline) compression method
     output_image_spec.attribute('pixelAspectRatio', pixelAspectRatio)
+    output_image_spec.attribute('Orientation', orientation)
     output_image.open(imagePath, output_image_spec)
 
     output_image.write_image(image)
