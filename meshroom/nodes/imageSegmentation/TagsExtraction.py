@@ -74,14 +74,14 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             name="output",
             label="Result Folder",
             description="Output path for the resulting images.",
-            value=desc.Node.internalFolder,
+            value="{nodeCacheFolder}",
         ),
         desc.File(
             name="results",
             label="Results",
             description="Generated images.",
             semantic="image",
-            value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
+            value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
         ),
     ]
