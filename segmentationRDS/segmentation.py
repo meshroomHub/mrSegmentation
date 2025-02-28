@@ -14,6 +14,8 @@ from segment_anything import build_sam, SamPredictor, sam_model_registry
 # Recognize Anything
 from ram.models import ram_plus
 from ram import inference_ram as inference
+# BiRefNet
+from models.birefnet import BiRefNet, BiRefNetC2F
 
 
 def get_size_with_aspect_ratio(image_size: int, size: int, max_size: int = None):
@@ -394,3 +396,69 @@ class DetectAnything:
                     bboxes[k][3] = min(H - 1, yc + halfNewH)
 
         return (bboxes, confidence, tags)
+
+class BiRefNetSeg:
+
+    def __init__(self, PATH_TO_WEIGHT:str, useGPU:bool=True):
+        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
+        if self.DEVICE == 'cpu' and useGPU:
+            print("Cannot execute on GPU, fallback to CPU execution mode")
+        # Load models
+
+        self.brn = BiRefNet(bb_pretrained=False)
+        state_dict = torch.load(PATH_TO_WEIGHT, map_location='cpu')
+        state_dict = check_state_dict(state_dict)
+        self.brn.load_state_dict(state_dict)
+
+        torch.set_float32_matmul_precision(['high', 'highest'][0])
+
+        self.brn.to(self.DEVICE)
+        self.brn.eval()
+        self.brn.half()
+
+    def __del__(self):
+        del self.brn
+
+
+    def segment(self, image_uint8: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
+        self.sam_predictor.set_image(image_uint8)
+        result_masks = []
+
+        image_size = (2048, 2048)
+        transform_image = torchvision.transforms.Compose([
+            torchvision.transforms.Resize(image_size),
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        ])
+
+        #image = Image.open(imagepath)
+        input_images = transform_image(image_uint8).unsqueeze(0).to(self.DEVICE).half()
+
+        # Prediction
+        with torch.no_grad():
+            preds = self.brn(input_images)[-1].sigmoid().cpu()
+        pred = preds[0].squeeze()
+
+        result_masks.append(pred)
+
+        # for box in xyxy:
+
+        #     masks, scores, logits = self.sam_predictor.predict(box=box, multimask_output=True)
+
+        #     index = np.argmax(scores)
+        #     result_masks.append(masks[index])
+
+        return np.array(result_masks)
+
+    def process(self, image: np.ndarray, bboxes = [], invert: bool = False, verbose: bool = False) -> np.ndarray:
+
+        #mask_image = np.zeros_like(image)
+        masks = self.segment((255.0*image).astype('uint8'), bboxes)
+        # for idx in range(len(masks)):
+        #     mask_image[masks[idx]] = [255, 255, 255]
+
+        # if invert:
+        #     return (mask_image[:,:,0:1] == 0).astype('float32')
+        # else:
+        #     return (mask_image[:,:,0:1] > 0).astype('float32')
+        return masks[0]
