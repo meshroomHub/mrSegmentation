@@ -14,8 +14,6 @@ from segment_anything import build_sam, SamPredictor, sam_model_registry
 # Recognize Anything
 from ram.models import ram_plus
 from ram import inference_ram as inference
-# BiRefNet
-from models.birefnet import BiRefNet, BiRefNetC2F
 
 
 def get_size_with_aspect_ratio(image_size: int, size: int, max_size: int = None):
@@ -400,6 +398,9 @@ class DetectAnything:
 class BiRefNetSeg:
 
     def __init__(self, PATH_TO_WEIGHT:str, useGPU:bool=True):
+        from birefnet.models.birefnet import BiRefNet
+        from birefnet.utils import check_state_dict
+
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
         if self.DEVICE == 'cpu' and useGPU:
             print("Cannot execute on GPU, fallback to CPU execution mode")
@@ -419,46 +420,56 @@ class BiRefNetSeg:
     def __del__(self):
         del self.brn
 
-
     def segment(self, image_uint8: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
-        self.sam_predictor.set_image(image_uint8)
         result_masks = []
+        input_image_size = (image_uint8.shape[0], image_uint8.shape[1])
+        matte_image = np.zeros(input_image_size)
 
-        image_size = (2048, 2048)
-        transform_image = torchvision.transforms.Compose([
-            torchvision.transforms.Resize(image_size),
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
-        ])
+        for box in xyxy:
 
-        #image = Image.open(imagepath)
-        input_images = transform_image(image_uint8).unsqueeze(0).to(self.DEVICE).half()
+            bboxImage = image_uint8[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :]
+            bboxH = bboxImage.shape[0]
+            bboxW = bboxImage.shape[1]
+            bboxSize = (bboxH, bboxW)
 
-        # Prediction
-        with torch.no_grad():
-            preds = self.brn(input_images)[-1].sigmoid().cpu()
-        pred = preds[0].squeeze()
+            if bboxImage.shape[0] % 32 == 0:
+                bboxH32 = bboxImage.shape[0]
+            else:
+                bboxH32 = (bboxImage.shape[0] // 32 + 1) * 32
+            if bboxImage.shape[1] % 32 == 0:
+                bboxW32 = bboxImage.shape[1]
+            else:
+                bboxW32 = (bboxImage.shape[1] // 32 + 1) * 32
 
-        result_masks.append(pred)
+            bboxSize32 = (bboxH32, bboxW32)
 
-        # for box in xyxy:
+            transform_image = torchvision.transforms.Compose([
+                torchvision.transforms.ToTensor(),
+                torchvision.transforms.Resize(bboxSize32),
+                torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+            input_images = transform_image(bboxImage).unsqueeze(0).to(self.DEVICE).half()
 
-        #     masks, scores, logits = self.sam_predictor.predict(box=box, multimask_output=True)
+            # Prediction
+            with torch.no_grad():
+                preds = self.brn(input_images)[-1].sigmoid().cpu()
 
-        #     index = np.argmax(scores)
-        #     result_masks.append(masks[index])
+            pred = torchvision.transforms.Resize(bboxSize)(preds[0])
+            pred = pred[0].numpy()
+            matte_image[int(box[1]):int(box[3]), int(box[0]):int(box[2])] = pred
+
+            result_masks.append(matte_image[..., None])
+            matte_image = np.zeros(input_image_size)
 
         return np.array(result_masks)
 
-    def process(self, image: np.ndarray, bboxes = [], invert: bool = False, verbose: bool = False) -> np.ndarray:
+    def process(self, image: np.ndarray, bboxes: np.ndarray = [], invert: bool = False, verbose: bool = False) -> np.ndarray:
 
-        #mask_image = np.zeros_like(image)
         masks = self.segment((255.0*image).astype('uint8'), bboxes)
-        # for idx in range(len(masks)):
-        #     mask_image[masks[idx]] = [255, 255, 255]
+        masksMax = np.max(masks, axis=0)
 
-        # if invert:
-        #     return (mask_image[:,:,0:1] == 0).astype('float32')
-        # else:
-        #     return (mask_image[:,:,0:1] > 0).astype('float32')
-        return masks[0]
+        if invert:
+            oneImg = np.ones_like(masksMax)
+            masksMax = oneImg - masksMax
+        
+        return masksMax

@@ -139,7 +139,6 @@ Based on the BiRefNet model.
 
             processor = segmentation.BiRefNetSeg(PATH_TO_WEIGHT = chunk.node.segmentationModelPath.value,
                                                  useGPU = chunk.node.useGpu.value)
-
             bboxDict = {}
             for file in os.listdir(chunk.node.bboxFolder.value):
                 if file.endswith(".json"):
