@@ -141,8 +141,6 @@ Based on the BiRefNet model.
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            # processor = segmentation.BiRefNetSeg(PATH_TO_WEIGHT = chunk.node.segmentationModelPath.value,
-            #                                      useGPU = chunk.node.useGpu.value)
             processor = segmentation.BiRefNetSeg(modelType = chunk.node.birefnetModelType.value,
                                                  useGPU = chunk.node.useGpu.value)
             bboxDict = {}

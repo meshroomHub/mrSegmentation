@@ -424,10 +424,10 @@ class BiRefNetSeg:
         del self.brn
 
     def segment(self, image_uint8: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
-        result_masks = []
         max_image_size = (2048, 4096)
         input_image_size = (image_uint8.shape[0], image_uint8.shape[1])
         matte_image = np.zeros(input_image_size)
+        result_masks = [matte_image[..., None]]
 
         for box in xyxy:
 
