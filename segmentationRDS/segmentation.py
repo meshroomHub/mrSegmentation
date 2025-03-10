@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torchvision
 
+from math import sqrt
+
 # Grounding DINO
 from groundingdino.util.inference import predict
 from groundingdino.models import build_model
