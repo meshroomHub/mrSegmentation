@@ -83,14 +83,14 @@ Based on the BiRefNet model.
             name="output",
             label="Masks Folder",
             description="Output path for the masks.",
-            value=desc.Node.internalFolder,
+            value="{nodeCacheFolder}",
         ),
         desc.File(
             name="masks",
             label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
-            value=lambda attr: desc.Node.internalFolder + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
+            value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group="",
         ),
     ]
