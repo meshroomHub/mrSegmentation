@@ -92,7 +92,7 @@ Based on the Segment Anything model.
         ),
     ]
 
-    def resolvedPaths(self, inputSfm, outDir, keepFilename):
+    def resolvedPaths(self, inputSfm, outDir, keepFilename, extension):
         import pyalicevision as av
         from pathlib import Path
 
@@ -103,11 +103,11 @@ Based on the Segment Anything model.
             for id, v in views.items():
                 inputFile = v.getImage().getImagePath()
                 if keepFilename:
-                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + ".exr")
+                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extension)
                     outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
                 else:
-                    outputFileMask = os.path.join(outDir, str(id) + ".exr")
-                    outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".exr")
+                    outputFileMask = os.path.join(outDir, str(id) + "." + extension)
+                    outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".jpg")
                 paths[inputFile] = (outputFileMask, outputFileBoxes)
 
         return paths
@@ -132,7 +132,7 @@ Based on the Segment Anything model.
 
             chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
-            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value)
+            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extension.value)
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
