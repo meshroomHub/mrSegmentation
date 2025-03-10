@@ -397,21 +397,22 @@ class DetectAnything:
 
 class BiRefNetSeg:
 
-    def __init__(self, PATH_TO_WEIGHT:str, useGPU:bool=True):
+    def __init__(self, modelType:str, useGPU:bool=True):
         from birefnet.models.birefnet import BiRefNet
-        from birefnet.utils import check_state_dict
 
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
         if self.DEVICE == 'cpu' and useGPU:
             print("Cannot execute on GPU, fallback to CPU execution mode")
         # Load models
+        pretrainedModel = 'ZhengPeng7/BiRefNet_HR-matting'
+        if modelType == 'BiRefNet LR':
+            pretrainedModel = 'ZhengPeng7/BiRefNet'
+        elif modelType == 'BiRefNet HR':
+            pretrainedModel = 'ZhengPeng7/BiRefNet_HR'
 
-        self.brn = BiRefNet(bb_pretrained=False)
-        state_dict = torch.load(PATH_TO_WEIGHT, map_location='cpu')
-        state_dict = check_state_dict(state_dict)
-        self.brn.load_state_dict(state_dict)
+        self.brn = BiRefNet.from_pretrained(pretrainedModel)
 
-        torch.set_float32_matmul_precision(['high', 'highest'][0])
+        torch.set_float32_matmul_precision('highest')
 
         self.brn.to(self.DEVICE)
         self.brn.eval()
@@ -422,30 +423,28 @@ class BiRefNetSeg:
 
     def segment(self, image_uint8: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
         result_masks = []
+        max_image_size = (2048, 4096)
         input_image_size = (image_uint8.shape[0], image_uint8.shape[1])
         matte_image = np.zeros(input_image_size)
 
         for box in xyxy:
 
             bboxImage = image_uint8[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :]
-            bboxH = bboxImage.shape[0]
-            bboxW = bboxImage.shape[1]
-            bboxSize = (bboxH, bboxW)
+            bboxSize = (bboxImage.shape[0], bboxImage.shape[1])
 
-            if bboxImage.shape[0] % 32 == 0:
-                bboxH32 = bboxImage.shape[0]
+            padMode = bboxSize[0] * bboxSize[1] < max_image_size[0] * max_image_size[1]
+            if padMode:
+                padding = [((imgDim - 1) // 32 + 1) * 32 - imgDim for imgDim in bboxSize]
+                resizeTransf = torchvision.transforms.Pad((0, 0, padding[1], padding[0]), padding_mode='symmetric')
             else:
-                bboxH32 = (bboxImage.shape[0] // 32 + 1) * 32
-            if bboxImage.shape[1] % 32 == 0:
-                bboxW32 = bboxImage.shape[1]
-            else:
-                bboxW32 = (bboxImage.shape[1] // 32 + 1) * 32
-
-            bboxSize32 = (bboxH32, bboxW32)
+                resize_ratio = sqrt((max_image_size[0] * max_image_size[1])/(bboxSize[0] * bboxSize[1]))
+                resize = [(round(resize_ratio * imgDim - 1) // 32 + 1) * 32 for imgDim in bboxSize]
+                resize = (resize[1], resize[0])
+                resizeTransf = torchvision.transforms.resize(resize)
 
             transform_image = torchvision.transforms.Compose([
                 torchvision.transforms.ToTensor(),
-                torchvision.transforms.Resize(bboxSize32),
+                resizeTransf,
                 torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
             ])
             input_images = transform_image(bboxImage).unsqueeze(0).to(self.DEVICE).half()
@@ -454,7 +453,11 @@ class BiRefNetSeg:
             with torch.no_grad():
                 preds = self.brn(input_images)[-1].sigmoid().cpu()
 
-            pred = torchvision.transforms.Resize(bboxSize)(preds[0])
+            if padMode:
+                pred = torchvision.transforms.functional.crop(preds[0], 0, 0, bboxSize[0], bboxSize[1])
+            else:
+                pred = torchvision.transforms.Resize(bboxSize)(preds[0])
+
             pred = pred[0].numpy()
             matte_image[int(box[1]):int(box[3]), int(box[0]):int(box[2])] = pred
 

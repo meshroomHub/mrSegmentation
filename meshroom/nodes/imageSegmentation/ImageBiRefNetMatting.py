@@ -6,14 +6,15 @@ from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 
 
-class ImageBiRefNetSegBox(desc.Node):
+class ImageBiRefNetMatting(desc.Node):
     size = desc.DynamicNodeSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
     category = "Utils"
     documentation = """
-Generate a binary mask from an input bounded box and points.
+Generate a matte from an input bounded box.
+In case no bounding box is provided, the full image is processed.
 Based on the BiRefNet model.
 """
 
@@ -30,11 +31,13 @@ Based on the BiRefNet model.
             description="JSON file containing prompting bounded boxes.",
             value="",
         ),
-        desc.File(
-            name="segmentationModelPath",
-            label="Segmentation Model",
-            description="Weights file for the segmentation model.",
-            value='/s/apps/users/multiview/birefnet/develop/weights/BiRefNet-matting-epoch_100.pth',#os.getenv("RDS_SEGMENTATION_MODEL_PATH", ""),
+        desc.ChoiceParam(
+            name="birefnetModelType",
+            label="BiRefNet Model Type",
+            description="Model type.",
+            value='BiRefNet HR Matting',
+            values=['BiRefNet LR','BiRefNet HR','BiRefNet HR Matting'],
+            exclusive=True,
         ),
         desc.BoolParam(
             name="maskInvert",
@@ -53,7 +56,7 @@ Based on the BiRefNet model.
             name="keepFilename",
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
-            value=False,
+            value=True,
         ),
         desc.ChoiceParam(
             name="extension",
@@ -120,13 +123,14 @@ Based on the BiRefNet model.
 
         try:
             chunk.logManager.start(chunk.node.verboseLevel.value)
+            processFullImages = False
 
             if not chunk.node.input:
                 chunk.logger.warning("Nothing to segment")
                 return
             if not chunk.node.bboxFolder.value:
-                chunk.logger.warning("No folder containing bounded boxes")
-                return
+                chunk.logger.warning("No folder containing bounded boxes, full images will be processed")
+                processFullImages = True
             if not chunk.node.output.value:
                 return
 
@@ -137,23 +141,30 @@ Based on the BiRefNet model.
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            processor = segmentation.BiRefNetSeg(PATH_TO_WEIGHT = chunk.node.segmentationModelPath.value,
+            # processor = segmentation.BiRefNetSeg(PATH_TO_WEIGHT = chunk.node.segmentationModelPath.value,
+            #                                      useGPU = chunk.node.useGpu.value)
+            processor = segmentation.BiRefNetSeg(modelType = chunk.node.birefnetModelType.value,
                                                  useGPU = chunk.node.useGpu.value)
             bboxDict = {}
-            for file in os.listdir(chunk.node.bboxFolder.value):
-                if file.endswith(".json"):
-                    with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
-                        bb = json.load(bboxFile)
-                        bboxDict.update(bb)
+            if not processFullImages:
+                for file in os.listdir(chunk.node.bboxFolder.value):
+                    if file.endswith(".json"):
+                        with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
+                            bb = json.load(bboxFile)
+                            bboxDict.update(bb)
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
                     img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
-                    bboxes = np.asarray(bboxDict[iFile]["bboxes"])
 
                     chunk.logger.info("image: {}".format(iFile))
-                    chunk.logger.debug("bboxes: {}".format(bboxDict[iFile]["bboxes"]))
-                    
+                     
+                    if not processFullImages:
+                        bboxes = np.asarray(bboxDict[iFile]["bboxes"])
+                        chunk.logger.debug("bboxes: {}".format(bboxDict[iFile]["bboxes"]))
+                    else:
+                        bboxes = np.array([[0, 0, img.shape[1] - 1, img.shape[0] - 1]])
+
                     mask = processor.process(image = img,
                                              bboxes = bboxes,
                                              invert = chunk.node.maskInvert.value,
