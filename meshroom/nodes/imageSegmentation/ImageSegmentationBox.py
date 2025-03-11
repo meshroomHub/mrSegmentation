@@ -31,6 +31,12 @@ Based on the Segment Anything model.
             value="",
         ),
         desc.File(
+            name="nukeTracker",
+            label="Nuke Tracker",
+            description="Nuke file .nk containing a tracker node.",
+            value="",
+        ),
+        desc.File(
             name="segmentationModelPath",
             label="Segmentation Model",
             description="Weights file for the segmentation model.",
@@ -102,6 +108,7 @@ Based on the Segment Anything model.
             views = dataAV.getViews()
             for id, v in views.items():
                 inputFile = v.getImage().getImagePath()
+                frameId = v.getFrameId()
                 if keepFilename:
                     outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extension)
                     outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
@@ -126,7 +133,7 @@ Based on the Segment Anything model.
                 return
             if not chunk.node.bboxFolder.value:
                 chunk.logger.warning("No folder containing bounded boxes")
-                return
+                #return
             if not chunk.node.output.value:
                 return
 
@@ -141,18 +148,27 @@ Based on the Segment Anything model.
                                                      useGPU = chunk.node.useGpu.value)
 
             bboxDict = {}
-            for file in os.listdir(chunk.node.bboxFolder.value):
-                if file.endswith(".json"):
-                    with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
-                        bb = json.load(bboxFile)
-                        bboxDict.update(bb)
-
+            if chunk.node.bboxFolder.value:
+                for file in os.listdir(chunk.node.bboxFolder.value):
+                    if file.endswith(".json"):
+                        with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
+                            bb = json.load(bboxFile)
+                            bboxDict.update(bb)
+ 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
                     img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
-                    bboxes = np.asarray(bboxDict[iFile]["bboxes"])
+                    if chunk.node.bboxFolder.value:
+                        bboxes = np.asarray(bboxDict[iFile]["bboxes"])
+                    else:
+                        print("toto")
+                        print(img.shape)
+                        print("tata")
+                        h,w,c = img.shape
+                        bboxes = np.asarray([[0, 0, w - 1, h - 1]])
 
-                    chunk.logger.info("image: {}".format(iFile))
+                    chunk.logger.info("frameId: {} - {}".format(oFile[2], iFile))
+                    # chunk.logger.info("image: {}".format(iFile))
                     chunk.logger.debug("bboxes: {}".format(bboxDict[iFile]["bboxes"]))
                     
                     mask = processor.process(image = img,
