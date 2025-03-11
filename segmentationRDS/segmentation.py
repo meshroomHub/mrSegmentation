@@ -441,7 +441,7 @@ class BiRefNetSeg:
             else:
                 resize_ratio = sqrt((max_image_size[0] * max_image_size[1])/(bboxSize[0] * bboxSize[1]))
                 resize = [(round(resize_ratio * imgDim - 1) // 32 + 1) * 32 for imgDim in bboxSize]
-                resize = (resize[1], resize[0])
+                resize = (resize[0], resize[1])
                 resizeTransf = torchvision.transforms.Resize(resize)
 
             transform_image = torchvision.transforms.Compose([
