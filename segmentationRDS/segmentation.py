@@ -3,6 +3,8 @@ import numpy as np
 import torch
 import torchvision
 
+from math import sqrt
+
 # Grounding DINO
 from groundingdino.util.inference import predict
 from groundingdino.models import build_model
@@ -394,3 +396,85 @@ class DetectAnything:
                     bboxes[k][3] = min(H - 1, yc + halfNewH)
 
         return (bboxes, confidence, tags)
+
+class BiRefNetSeg:
+
+    def __init__(self, modelType:str, useGPU:bool=True):
+        from birefnet.models.birefnet import BiRefNet
+
+        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
+        if self.DEVICE == 'cpu' and useGPU:
+            print("Cannot execute on GPU, fallback to CPU execution mode")
+        # Load models
+        pretrainedModel = 'ZhengPeng7/BiRefNet_HR-matting'
+        if modelType == 'BiRefNet LR':
+            pretrainedModel = 'ZhengPeng7/BiRefNet'
+        elif modelType == 'BiRefNet HR':
+            pretrainedModel = 'ZhengPeng7/BiRefNet_HR'
+
+        self.brn = BiRefNet.from_pretrained(pretrainedModel)
+
+        torch.set_float32_matmul_precision('highest')
+
+        self.brn.to(self.DEVICE)
+        self.brn.eval()
+        self.brn.half()
+
+    def __del__(self):
+        del self.brn
+
+    def segment(self, image_uint8: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
+        max_image_size = (2048, 4096)
+        input_image_size = (image_uint8.shape[0], image_uint8.shape[1])
+        matte_image = np.zeros(input_image_size)
+        result_masks = [matte_image[..., None]]
+
+        for box in xyxy:
+
+            bboxImage = image_uint8[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :]
+            bboxSize = (bboxImage.shape[0], bboxImage.shape[1])
+
+            padMode = bboxSize[0] * bboxSize[1] < max_image_size[0] * max_image_size[1]
+            if padMode:
+                padding = [((imgDim - 1) // 32 + 1) * 32 - imgDim for imgDim in bboxSize]
+                resizeTransf = torchvision.transforms.Pad((0, 0, padding[1], padding[0]), padding_mode='symmetric')
+            else:
+                resize_ratio = sqrt((max_image_size[0] * max_image_size[1])/(bboxSize[0] * bboxSize[1]))
+                resize = [(round(resize_ratio * imgDim - 1) // 32 + 1) * 32 for imgDim in bboxSize]
+                resize = (resize[0], resize[1])
+                resizeTransf = torchvision.transforms.Resize(resize)
+
+            transform_image = torchvision.transforms.Compose([
+                torchvision.transforms.ToTensor(),
+                resizeTransf,
+                torchvision.transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            ])
+            input_images = transform_image(bboxImage).unsqueeze(0).to(self.DEVICE).half()
+
+            # Prediction
+            with torch.no_grad():
+                preds = self.brn(input_images)[-1].sigmoid().cpu()
+
+            if padMode:
+                pred = torchvision.transforms.functional.crop(preds[0], 0, 0, bboxSize[0], bboxSize[1])
+            else:
+                pred = torchvision.transforms.Resize(bboxSize)(preds[0])
+
+            pred = pred[0].numpy()
+            matte_image[int(box[1]):int(box[3]), int(box[0]):int(box[2])] = pred
+
+            result_masks.append(matte_image[..., None])
+            matte_image = np.zeros(input_image_size)
+
+        return np.array(result_masks)
+
+    def process(self, image: np.ndarray, bboxes: np.ndarray = [], invert: bool = False, verbose: bool = False) -> np.ndarray:
+
+        masks = self.segment((255.0*image).astype('uint8'), bboxes)
+        masksMax = np.max(masks, axis=0)
+
+        if invert:
+            oneImg = np.ones_like(masksMax)
+            masksMax = oneImg - masksMax
+        
+        return masksMax
