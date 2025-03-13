@@ -184,9 +184,11 @@ def addRectangle(image: np.ndarray, rect, color = (255, 0, 0), fill = False) -> 
     oiio.ImageBufAlgo.render_box(buf, int(rect[0]), int(rect[1]), int(rect[2]), int(rect[3]), color, fill)
     return buf.get_pixels(format='uint8')
 
-def addPoint(image: np.ndarray, point) -> np.ndarray:
+def addPoint(image: np.ndarray, point, color = (255, 0, 0)) -> np.ndarray:
     buf = oiio.ImageBuf(image)
-    oiio.ImageBufAlgo.render_text(buf, int(point[0]) - 8, int(point[1]) - 8, '*')
+    oiio.ImageBufAlgo.render_box(buf, int(point[0]) - 4, int(point[1]) - 4, int(point[0]) + 4, int(point[1]) + 4, color = color)
+    oiio.ImageBufAlgo.render_line(buf, int(point[0]) - 4, int(point[1]) - 4, int(point[0]) + 4, int(point[1]) + 4, color = color)
+    oiio.ImageBufAlgo.render_line(buf, int(point[0]) - 4, int(point[1]) + 4, int(point[0]) + 4, int(point[1]) - 4, color = color)
     return buf.get_pixels(format='uint8')
 
 def addText(image: np.ndarray, text, x, y, size, color = (255, 0, 0)) -> np.ndarray:
