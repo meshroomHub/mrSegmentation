@@ -198,7 +198,7 @@ In case neither tracker nor json file is available, the model is applied on the 
                     clicksIn = []
                     clicksOut = []
                     if tracker is not None:
-                        data = tracker.getDataAtFrame(frameId, img.shape[0])
+                        data = tracker.getDataAtFrame(frameId, img.shape[0], PAR)
                         trackNames = tracker.getTrackNames()
                         for trackName in trackNames:
                             if data[trackName][0][0] is not None:

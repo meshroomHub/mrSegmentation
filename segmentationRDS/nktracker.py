@@ -228,7 +228,7 @@ class nkTracker:
     def getTrackNames(self):
         return list(self.tracks.keys())
 
-    def getDataAtFrame(self, frameId:int, height:int = -1):
+    def getDataAtFrame(self, frameId:int, height:int = -1, par:float = 1.0):
         """
         Returns track center and bounding box and search bounding box at a given frame.
         Because tracking infos are not linked with the size of the frames in the sequence on which the tracker is applied,
@@ -238,6 +238,7 @@ class nkTracker:
         Args:
         frameId: frame idx.
         height: frame height.
+        par: pixel aspect ratio.
 
         Returns:
         A tuple containing the track center (x, y), the tracking and the search bounding boxes in the following format:
@@ -248,7 +249,7 @@ class nkTracker:
             bbT = None
             bbS = None
             x = getValueAtFrame(self.tracks[key]['track_x']['curve'], frameId)
-            y = getValueAtFrame(self.tracks[key]['track_y']['curve'], frameId)
+            y = getValueAtFrame(self.tracks[key]['track_y']['curve'], frameId) / par
             if x is not None:
                 bbT_TL_x = x + self.tracks[key]['pattern_x']
                 bbT_TL_y = y + self.tracks[key]['pattern_t']
