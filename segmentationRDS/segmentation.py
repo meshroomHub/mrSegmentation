@@ -377,23 +377,34 @@ class DetectAnything:
         recoOK, tags = self.recognize(wordlist, image, verbose)
         bboxes = np.array([])
         confidence = np.array([])
+        bboxSideMinSize = 17
+        smallBboxIdxs = []
         if recoOK or force:
             bboxes, confidence = self.detect(image=image, TEXT_PROMPT=prompt, BOX_THRESHOLD=threshold)
-            if bboxMargin > 0:
-                ratio = 1.0 + (min(max(0, bboxMargin), 100.0) / 100.0)
-                H,W,_ = image.shape
-                for k,bbox in enumerate(bboxes):
-                    if bbox[0] > bbox[2]:
-                        bbox[0], bbox[2] = bbox[2], bbox[0]
-                        bbox[1], bbox[3] = bbox[3], bbox[1]
+            H,W,_ = image.shape
+            for k,bbox in enumerate(bboxes):
+                if bbox[0] > bbox[2]:
+                    bbox[0], bbox[2] = bbox[2], bbox[0]
+                    bbox[1], bbox[3] = bbox[3], bbox[1]
+                if bbox[2] - bbox[0] < bboxSideMinSize or bbox[3] - bbox[1] < bboxSideMinSize:
+                    smallBboxIdxs.append(k)
+                elif bboxMargin > 0:
+                    ratio = 1.0 + (min(max(0, bboxMargin), 100.0) / 100.0)
                     xc = (bbox[2] + bbox[0]) / 2
                     yc = (bbox[3] + bbox[1]) / 2
                     halfNewW = (bbox[2] - bbox[0]) * ratio / 2.0
                     halfNewH = (bbox[3] - bbox[1]) * ratio / 2.0
-                    bboxes[k][0] = max(0, xc - halfNewW)
-                    bboxes[k][2] = min(W - 1, xc + halfNewW)
-                    bboxes[k][1] = max(0, yc - halfNewH)
-                    bboxes[k][3] = min(H - 1, yc + halfNewH)
+                    bboxes[k][0] = int(max(0, xc - halfNewW))
+                    bboxes[k][2] = int(min(W - 1, xc + halfNewW))
+                    bboxes[k][1] = int(max(0, yc - halfNewH))
+                    bboxes[k][3] = int(min(H - 1, yc + halfNewH))
+                else:
+                    bboxes[k][0] = int(max(0, bbox[0]))
+                    bboxes[k][2] = int(min(W - 1, bbox[2]))
+                    bboxes[k][1] = int(max(0, bbox[1]))
+                    bboxes[k][3] = int(min(H - 1, bbox[3]))
+            if len(smallBboxIdxs) > 0:
+                bboxes = np.delete(bboxes, np.array(smallBboxIdxs), 0)
 
         return (bboxes, confidence, tags)
 
