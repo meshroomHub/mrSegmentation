@@ -93,6 +93,10 @@ def fillTrack(tracks:str, startIdx:int, fields):
             idxEndInfo = tracks.find('}', idx)
             info = tracks[idx+1:idxEndInfo]
             idx = idxEndInfo + 1
+        elif tracks[idx] == '"':
+            idxEndInfo = tracks.find('"', idx+1)
+            info = tracks[idx+1:idxEndInfo]
+            idx = idxEndInfo + 1
         elif tracks[idx] == ' ':
             idxEndInfo = min(tracks.find(' ', idx+1), tracks.find('{', idx+1))
             info = tracks[idx+1:idxEndInfo]
@@ -213,7 +217,7 @@ class nkTracker:
                 scalarKeys = ['pattern_x', 'pattern_y', 'pattern_r', 'pattern_t', 'search_x', 'search_y', 'search_r', 'search_t']
 
                 for i in range(0, nbTracks):
-                    trackName = trs[i]["name"][1:-1]
+                    trackName = trs[i]["name"]
                     track = {}
                     for key in curveKeys:
                         interpolationType, curve = getCurve(trs[i][key])
