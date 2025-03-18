@@ -377,8 +377,6 @@ class DetectAnything:
         recoOK, tags = self.recognize(wordlist, image, verbose)
         bboxes = np.array([])
         confidence = np.array([])
-        bboxSideMinSize = 17
-        smallBboxIdxs = []
         if recoOK or force:
             bboxes, confidence = self.detect(image=image, TEXT_PROMPT=prompt, BOX_THRESHOLD=threshold)
             H,W,_ = image.shape
@@ -386,9 +384,7 @@ class DetectAnything:
                 if bbox[0] > bbox[2]:
                     bbox[0], bbox[2] = bbox[2], bbox[0]
                     bbox[1], bbox[3] = bbox[3], bbox[1]
-                if bbox[2] - bbox[0] < bboxSideMinSize or bbox[3] - bbox[1] < bboxSideMinSize:
-                    smallBboxIdxs.append(k)
-                elif bboxMargin > 0:
+                if bboxMargin > 0:
                     ratio = 1.0 + (min(max(0, bboxMargin), 100.0) / 100.0)
                     xc = (bbox[2] + bbox[0]) / 2
                     yc = (bbox[3] + bbox[1]) / 2
@@ -403,8 +399,6 @@ class DetectAnything:
                     bboxes[k][2] = int(min(W - 1, bbox[2]))
                     bboxes[k][1] = int(max(0, bbox[1]))
                     bboxes[k][3] = int(min(H - 1, bbox[3]))
-            if len(smallBboxIdxs) > 0:
-                bboxes = np.delete(bboxes, np.array(smallBboxIdxs), 0)
 
         return (bboxes, confidence, tags)
 
@@ -439,8 +433,12 @@ class BiRefNetSeg:
         input_image_size = (image_uint8.shape[0], image_uint8.shape[1])
         matte_image = np.zeros(input_image_size)
         result_masks = [matte_image[..., None]]
+        bboxSideMinSize = 17
 
         for box in xyxy:
+
+            if box[2] - box[0] < bboxSideMinSize or box[3] - box[1] < bboxSideMinSize:
+                continue
 
             bboxImage = image_uint8[int(box[1]):int(box[3]), int(box[0]):int(box[2]), :]
             bboxSize = (bboxImage.shape[0], bboxImage.shape[1])
