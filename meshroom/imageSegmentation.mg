@@ -56,7 +56,6 @@
             "inputs": {
                 "input": "{ImageDetectionPrompt_1.input}",
                 "bboxFolder": "{ImageDetectionPrompt_1.output}",
-                "maskInvert": true,
                 "keepFilename": true
             },
             "internalInputs": {
