@@ -14,6 +14,7 @@ class ImageDetectionPrompt(desc.Node):
     category = "Utils"
     documentation = """
 Generate bounded boxes corresponding to the input text prompt.
+
 First a recognition model (image to tags) is launched on the input image.
 If the prompt or a synonym is detected in the returned list of tags the detection model (tag to bounded box) is launched.
 Detection can be forced by setting to True the appropriate parameter.
