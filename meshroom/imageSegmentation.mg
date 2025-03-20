@@ -4,9 +4,9 @@
         "fileVersion": "2.0",
         "nodesVersions": {
             "CameraInit": "12.0",
-            "ImageBiRefNetMatting": "0.1",
+            "ImageBiRefNetMatting": "0.2",
             "ImageDetectionPrompt": "0.1",
-            "ImageSegmentationBox": "0.1",
+            "ImageSegmentationBox": "0.2",
             "Publish": "1.3"
         },
         "template": true
@@ -15,19 +15,16 @@
         "CameraInit_1": {
             "nodeType": "CameraInit",
             "position": [
-                -2,
-                -60
+                0,
+                0
             ],
-            "inputs": {},
-            "internalInputs": {
-                "color": "#575963"
-            }
+            "inputs": {}
         },
         "ImageBiRefNetMatting_1": {
             "nodeType": "ImageBiRefNetMatting",
             "position": [
-                423,
-                -116
+                400,
+                -80
             ],
             "inputs": {
                 "input": "{ImageDetectionPrompt_1.input}",
@@ -37,36 +34,30 @@
         "ImageDetectionPrompt_1": {
             "nodeType": "ImageDetectionPrompt",
             "position": [
-                198,
-                -60
+                200,
+                0
             ],
             "inputs": {
                 "input": "{CameraInit_1.output}"
-            },
-            "internalInputs": {
-                "color": "#575963"
             }
         },
         "ImageSegmentationBox_1": {
             "nodeType": "ImageSegmentationBox",
             "position": [
-                423,
-                -4
+                400,
+                60
             ],
             "inputs": {
                 "input": "{ImageDetectionPrompt_1.input}",
                 "bboxFolder": "{ImageDetectionPrompt_1.output}",
                 "keepFilename": true
-            },
-            "internalInputs": {
-                "color": "#575963"
             }
         },
         "Publish_1": {
             "nodeType": "Publish",
             "position": [
-                630,
-                -50
+                600,
+                0
             ],
             "inputs": {
                 "inputFiles": [
