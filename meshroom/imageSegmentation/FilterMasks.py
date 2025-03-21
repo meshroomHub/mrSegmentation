@@ -1,6 +1,7 @@
 __version__ = "1.0"
 
 import os
+from socket import errorTab
 
 from meshroom.core import desc
 import json
@@ -40,7 +41,7 @@ def _temporal_filtering(frames, masks, window_size=3, use_of=True, metric=np.med
                                                     pyr_scale=0.5, levels=3, winsize=15,
                                                     iterations=3, poly_n=5, poly_sigma=1.2, flags=0)
                 # warp the masks  j to  i 
-                h, w, _ = masks[j].kernel_shape
+                h, w, _ = masks[j].shape
                 grid_x, grid_y = np.meshgrid(np.arange(w), np.arange(h))
                 map_x = grid_x + flow[..., 0]
                 map_y = grid_y + flow[..., 1]
@@ -65,8 +66,6 @@ def open_image(filename):
     inp = oiio.ImageInput.open(filename)
     if inp :
         spec = inp.spec()
-        xres = spec.width
-        yres = spec.height
         nchannels = spec.nchannels
         pixels = inp.read_image(0, 0, 0, nchannels, "uint8")
         inp.close()
@@ -83,7 +82,7 @@ class Operations():
     #dummy
     def identity(masks, **kwargs):
         """
-        Doens nothing
+        Does nothing
         """
         return masks
 
@@ -275,7 +274,7 @@ class FilterMasks(desc.Node):
             name='outputFolder',
             label='outputFolder',
             description='outputFolder',
-            value=desc.Node.internalFolder,
+            value="{nodeCacheFolder}",
             group='',
         ),
         desc.File(
@@ -283,7 +282,7 @@ class FilterMasks(desc.Node):
             label='Masks',
             description='Generated segmentation masks.',
             semantic='image',
-            value=lambda attr: desc.Node.internalFolder + '<VIEW_ID>.'+attr.node.extension.value,
+            value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
             group='',
             visible=False
         ),
@@ -295,9 +294,13 @@ class FilterMasks(desc.Node):
         """
         chunk.logManager.start(chunk.node.verboseLevel.value)
         if chunk.node.inputSfM.value == '':
-            raise RuntimeError('No inputSfM specified')
+            error = 'No inputSfM specified'
+            chunk.logger.error(error)
+            raise RuntimeError(error)
         if chunk.node.maskFolder.value == '':
-            raise RuntimeError('No maskFolder specified')
+            error = 'No maskFolder specified'
+            chunk.logger.error(error)
+            raise RuntimeError(error)
         
         #loading and temporal sort
         chunk.logger.info('Loading masks')
@@ -314,14 +317,14 @@ class FilterMasks(desc.Node):
                 image_basename = view['viewId']
             mask_file = os.path.join(chunk.node.maskFolder.value, image_basename+'.'+chunk.node.extension.value)
             if not os.path.exists(mask_file):
-                raise FileNotFoundError(mask_file+" not found.")
+                error = mask_file+" not found."
+                chunk.logger.error(error)
+                raise FileNotFoundError(error)
             chunk.logger.info('Opening '+view['path'])
             
             images.append(open_image(view['path']))
             chunk.logger.info('Opening '+mask_file)
             masks.append(open_image(mask_file)/255.0)
-            print((open_image(mask_file).shape))
-            
 
         #filter
         chunk.logger.info('Applying filter')
@@ -345,7 +348,9 @@ class FilterMasks(desc.Node):
                                     image_basename+'.'+chunk.node.extension.value)
             out = oiio.ImageOutput.create(filename)
             if not out:
-                raise RuntimeError("Could no create "+filename)
+                error = "Could no create "+filename
+                chunk.logger.error(error)
+                raise RuntimeError(error)
             
             spec = oiio.ImageSpec(mask.shape[1], mask.shape[0], 1, 'uint8')
             out.open(filename, spec)
