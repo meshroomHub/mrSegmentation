@@ -163,6 +163,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
         from segmentationRDS import image, segmentation
         import torch
 
+        processor = None
         try:
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
@@ -229,15 +230,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             outfile.write(jsonObject)
             outfile.close()
 
+        finally:
             del processor
             torch.cuda.empty_cache()
-
-        finally:
             chunk.logManager.end()
-
-    def stopProcess(sel, chunk):
-        try:
-            del processor
-        except:
-            pass
-
