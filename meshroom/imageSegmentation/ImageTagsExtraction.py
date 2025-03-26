@@ -110,6 +110,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
         from segmentationRDS import image, segmentation
         import torch
 
+        processor = None
         try:
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
@@ -165,15 +166,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             outfile.write(jsonObject)
             outfile.close()
 
+        finally:
             del processor
             torch.cuda.empty_cache()
-
-        finally:
             chunk.logManager.end()
-
-    def stopProcess(sel, chunk):
-        try:
-            del processor
-        except:
-            pass
-

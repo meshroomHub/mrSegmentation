@@ -151,6 +151,7 @@ In case neither tracker nor json file is available, the model is applied on the 
         import numpy as np
         import torch
 
+        processor = None
         try:
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
@@ -236,16 +237,7 @@ In case neither tracker nor json file is available, the model is applied on the 
                             bbox_img = image.addPoint(bbox_img, click, (255, 0, 0))
                         image.writeImage(oFile[1], bbox_img, h_ori, w_ori, orientation, PAR)
 
+        finally:
             del processor
             torch.cuda.empty_cache()
-
-        finally:
             chunk.logManager.end()
-
-    def stopProcess(sel, chunk):
-        # torch.cuda.empty_cache()
-        try:
-            del processor
-        except:
-            pass
-
