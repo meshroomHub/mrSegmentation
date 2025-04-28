@@ -149,7 +149,14 @@ class FilterMasks(desc.Node):
             error = 'No maskFolder specified'
             chunk.logger.error(error)
             raise RuntimeError(error)
-        
+
+        filter_function = eval('filtering.Operations.'+chunk.node.filterType.value)
+        kargs={}
+        for a in chunk.node.attributes:
+            if a.attributeDesc.group=='opt':
+                kargs[a.name]=a.value 
+        chunk.logger.info(kargs)
+
         #loading and temporal sort
         chunk.logger.info('Loading masks')
         sfm_data=json.load(open(chunk.node.inputSfM.value,'r'))
@@ -179,28 +186,33 @@ class FilterMasks(desc.Node):
             masks.append(mask_img)
             metas.append((h_ori, w_ori, PAR, orientation))
 
-        #filter
-        chunk.logger.info('Applying filter')
-        filter_function = eval('filtering.Operations.'+chunk.node.filterType.value)
-        
-        kargs={}
-        for a in chunk.node.attributes:
-            if a.attributeDesc.group=='opt':
-                kargs[a.name]=a.value 
-        chunk.logger.info(kargs)
-        filtered_masks = filter_function(masks,images=images,**kargs)
+            if chunk.node.filterType.value != "temporal_filtering":
+                # filtering
+                filtered_masks = filter_function(masks,images=images,**kargs)
+
+                # saving
+                filename = os.path.join(chunk.node.outputFolder.value, image_basename+'.'+chunk.node.extension.value)
+                if len(filtered_masks[0].shape)<3:
+                    filtered_masks[0]=np.expand_dims(filtered_masks[0], axis=-1)
+                image.writeImage(filename, filtered_masks[0], h_ori, w_ori, orientation, PAR)
+
+        if chunk.node.filterType.value == "temporal_filtering":
+            #filter
+            chunk.logger.info('Applying temporal filter')
             
-        #saving
-        chunk.logger.info('Saving masks')
-        for view, mask, meta in zip(sfm_data['views'], filtered_masks, metas):
-            if chunk.node.keepFilename.value:
-                image_basename = os.path.splitext(os.path.basename(view['path']))[0]
-            else:
-                image_basename = view["viewId"]
-            filename = os.path.join(chunk.node.outputFolder.value, image_basename+'.'+chunk.node.extension.value)
-            if len(mask.shape)<3:
-                mask=np.expand_dims(mask, axis=-1)
-            image.writeImage(filename, mask, meta[0], meta[1], meta[3], meta[2])
+            filtered_masks = filter_function(masks,images=images,**kargs)
+                
+            #saving
+            chunk.logger.info('Saving masks')
+            for view, mask, meta in zip(sfm_data['views'], filtered_masks, metas):
+                if chunk.node.keepFilename.value:
+                    image_basename = os.path.splitext(os.path.basename(view['path']))[0]
+                else:
+                    image_basename = view["viewId"]
+                filename = os.path.join(chunk.node.outputFolder.value, image_basename+'.'+chunk.node.extension.value)
+                if len(mask.shape)<3:
+                    mask=np.expand_dims(mask, axis=-1)
+                image.writeImage(filename, mask, meta[0], meta[1], meta[3], meta[2])
 
         chunk.logManager.end()
 
