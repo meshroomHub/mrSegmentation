@@ -13,6 +13,8 @@ from groundingdino.util.slconfig import SLConfig
 
 # Segment Anything
 from segment_anything import build_sam, SamPredictor, sam_model_registry
+from sam2.build_sam import build_sam2
+from sam2.sam2_image_predictor import SAM2ImagePredictor
 # Recognize Anything
 from ram.models import ram_plus
 from ram import inference_ram as inference
@@ -190,14 +192,17 @@ class SegmentationRDS:
 
 class SegmentAnything:
 
-    def __init__(self, SAM_CHECKPOINT_PATH:str, SAM_ENCODER_VERSION:str='vit_h', useGPU:bool=True):
+    def __init__(self, SAM_CHECKPOINT_PATH:str, SAM_ENCODER_VERSION:str='vit_h', SAM_MODEL_CFG:str='', useGPU:bool=True):
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
         if self.DEVICE == 'cpu' and useGPU:
             print("Cannot execute on GPU, fallback to CPU execution mode")
         # Load models
-        sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH)
-        sam.to(self.DEVICE)
-        self.sam_predictor = SamPredictor(sam)
+        if SAM_MODEL_CFG == '':
+            sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH)
+            sam.to(self.DEVICE)
+            self.sam_predictor = SamPredictor(sam)
+        else:
+            self.sam_predictor = SAM2ImagePredictor(build_sam2(SAM_MODEL_CFG, SAM_CHECKPOINT_PATH))
 
     def __del__(self):
         del self.sam_predictor

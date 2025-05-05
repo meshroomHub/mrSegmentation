@@ -53,6 +53,12 @@ In case neither tracker nor json file is available, the model is applied on the 
             description="Weights file for the segmentation model.",
             value="${RDS_SEGMENTATION_MODEL_PATH}",
         ),
+        desc.File(
+            name="segmentationConfigFile",
+            label="Segmentation Config File",
+            description="Config file for the segmentation (sam2 only) model.",
+            value="",#os.getenv("RDS_SEGMENTATION_MODEL_PATH", ""),
+        ),
         desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
@@ -175,6 +181,7 @@ In case neither tracker nor json file is available, the model is applied on the 
                 os.mkdir(chunk.node.output.value)
 
             processor = segmentation.SegmentAnything(SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.evalValue,
+                                                     SAM_MODEL_CFG = chunk.node.segmentationConfigFile.value,
                                                      useGPU = chunk.node.useGpu.value)
 
             bboxDict = {}
