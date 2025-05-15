@@ -159,6 +159,7 @@ class SegmentationRDS:
 
         recoOK, tags = self.recognize(wordlist, image, verbose)
         bboxes = []
+        confidence = []
         mask_image = np.zeros_like(image)
         if recoOK or force:
             bboxes, confidence = self.detect(image=image, TEXT_PROMPT=prompt, BOX_THRESHOLD=threshold)
