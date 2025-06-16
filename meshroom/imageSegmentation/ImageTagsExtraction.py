@@ -26,7 +26,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             name="recognitionModelPath",
             label="Recognition Model",
             description="Weights file for the recognition model.",
-            value=os.getenv("RDS_RECOGNITION_MODEL_PATH", ""),
+            value="${RDS_RECOGNITION_MODEL_PATH}",
         ),
         desc.BoolParam(
             name="useGpu",
@@ -129,7 +129,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
 
             os.environ["TOKENIZERS_PARALLELISM"] = "true"  # required to avoid warning on tokenizers
 
-            processor = segmentation.RecognizeAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
+            processor = segmentation.RecognizeAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.evalValue,
                                                        useGPU = chunk.node.useGpu.value)
 
             dict = {}
