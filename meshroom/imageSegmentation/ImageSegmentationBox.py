@@ -51,7 +51,7 @@ In case neither tracker nor json file is available, the model is applied on the 
             name="segmentationModelPath",
             label="Segmentation Model",
             description="Weights file for the segmentation model.",
-            value=os.getenv("RDS_SEGMENTATION_MODEL_PATH", ""),
+            value="${RDS_SEGMENTATION_MODEL_PATH}",
         ),
         desc.BoolParam(
             name="maskInvert",
@@ -174,7 +174,7 @@ In case neither tracker nor json file is available, the model is applied on the 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            processor = segmentation.SegmentAnything(SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.value,
+            processor = segmentation.SegmentAnything(SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.evalValue,
                                                      useGPU = chunk.node.useGpu.value)
 
             bboxDict = {}

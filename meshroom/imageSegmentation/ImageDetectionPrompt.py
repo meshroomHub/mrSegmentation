@@ -32,19 +32,19 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             name="recognitionModelPath",
             label="Recognition Model",
             description="Weights file for the recognition model.",
-            value=os.getenv("RDS_RECOGNITION_MODEL_PATH", ""),
+            value="${RDS_RECOGNITION_MODEL_PATH}",
         ),
         desc.File(
             name="detectionModelPath",
             label="Detection Model",
             description="Weights file for the detection model.",
-            value=os.getenv("RDS_DETECTION_MODEL_PATH", ""),
+            value="${RDS_DETECTION_MODEL_PATH}",
         ),
         desc.File(
             name="detectionConfigPath",
             label="Detection Config",
             description="Config file for the detection model.",
-            value=os.getenv("RDS_DETECTION_CONFIG_PATH", ""),
+            value="${RDS_DETECTION_CONFIG_PATH}",
         ),
         desc.StringParam(
             name="prompt",
@@ -182,9 +182,9 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
 
             os.environ["TOKENIZERS_PARALLELISM"] = "true"  # required to avoid warning on tokenizers
 
-            processor = segmentation.DetectAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.value,
-                                                    GD_CONFIG_PATH = chunk.node.detectionConfigPath.value,
-                                                    GD_CHECKPOINT_PATH = chunk.node.detectionModelPath.value,
+            processor = segmentation.DetectAnything(RAM_CHECKPOINT_PATH = chunk.node.recognitionModelPath.evalValue,
+                                                    GD_CONFIG_PATH = chunk.node.detectionConfigPath.evalValue,
+                                                    GD_CHECKPOINT_PATH = chunk.node.detectionModelPath.evalValue,
                                                     useGPU = chunk.node.useGpu.value)
 
             prompt = chunk.node.prompt.value.replace("\n", ".")
