@@ -223,7 +223,11 @@ class SegmentAnything:
             else:
                 masks, scores, logits = self.sam_predictor.predict(box=box, multimask_output=True)
             index = np.argmax(scores)
+            #mask = masks[index].astype(np.uint8)
             result_masks.append(masks[index])
+            #result_masks.append(masks[index].astype(np.uint8))
+            #mask = mask.astype(np.uint8)
+            #print(f"mask type : {masks[index].dtype}")
 
         return np.array(result_masks)
 
@@ -245,7 +249,7 @@ class SegmentAnything:
         mask_image = np.zeros_like(image)
         masks = self.segment((255.0*image).astype('uint8'), bboxes, np.asarray(point_coords), np.asarray(point_labels))
         for idx in range(len(masks)):
-            mask_image[masks[idx]] = [255, 255, 255]
+            mask_image[masks[idx]!=0.0] = [255, 255, 255]
 
         if invert:
             return (mask_image[:,:,0:1] == 0).astype('float32')
