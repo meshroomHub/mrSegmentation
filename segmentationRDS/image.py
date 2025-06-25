@@ -53,14 +53,14 @@ def srgb_gamma_inv(x):
     else:
         return 1.055 * pow(min(1.0, x), 1.0/2.4) - 0.055
 
-def find_metadata(oiio_spec, name: str, default):
+def find_metadata(oiio_spec, name: str, default, exact: bool = True):
     values = []
     oiio_extra_attribs = oiio_spec.extra_attribs
     for i in range(len(oiio_extra_attribs)):
         pos = oiio_extra_attribs[i].name.find(name)
         if pos == 0:
             values.insert(0, oiio_spec.getattribute(oiio_extra_attribs[i].name))
-        elif pos != -1:
+        elif pos != -1 and not exact:
             values.append(oiio_spec.getattribute(oiio_extra_attribs[i].name))
     if len(values) == 0:
         values.append(default)

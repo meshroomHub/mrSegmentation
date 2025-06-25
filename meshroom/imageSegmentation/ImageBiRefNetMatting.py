@@ -124,12 +124,13 @@ In case neither tracker nor json file is available, the model is applied on the 
     ]
 
     def resolvedPaths(self, inputSfm, outDir, keepFilename, extension):
-        import pyalicevision as av
+        from pyalicevision import sfmData
+        from pyalicevision import sfmDataIO
         from pathlib import Path
 
         paths = {}
-        dataAV = av.sfmData.SfMData()
-        if av.sfmDataIO.load(dataAV, inputSfm, av.sfmDataIO.ALL) and os.path.isdir(outDir):
+        dataAV = sfmData.SfMData()
+        if sfmDataIO.load(dataAV, inputSfm, sfmDataIO.ALL) and os.path.isdir(outDir):
             views = dataAV.getViews()
             for id, v in views.items():
                 inputFile = v.getImage().getImagePath()

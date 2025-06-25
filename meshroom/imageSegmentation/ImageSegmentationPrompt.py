@@ -158,12 +158,13 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
     ]
 
     def resolvedPaths(self, inputSfm, outDir, keepFilename, ext):
-        import pyalicevision as av
+        from pyalicevision import sfmData
+        from pyalicevision import sfmDataIO
         from pathlib import Path
 
         paths = {}
-        dataAV = av.sfmData.SfMData()
-        if av.sfmDataIO.load(dataAV, inputSfm, av.sfmDataIO.ALL) and os.path.isdir(outDir):
+        dataAV = sfmData.SfMData()
+        if sfmDataIO.load(dataAV, inputSfm, sfmDataIO.ALL) and os.path.isdir(outDir):
             views = dataAV.getViews()
             for id, v in views.items():
                 inputFile = v.getImage().getImagePath()
