@@ -1,0 +1,2 @@
+-i https://download.pytorch.org/whl/cu124
+torch==2.5.1
