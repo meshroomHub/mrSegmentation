@@ -9,6 +9,10 @@ class FilterMasks(desc.Node):
 
     category = 'Utils'
     documentation = '''Apply selected operation to a set of input masks'''
+    
+    size = desc.DynamicNodeSize("inputSfM")
+    cpu = desc.Level.INTENSIVE
+    parallelization = desc.Parallelization(blockSize=50)
 
     inputs = [
         desc.File(
@@ -149,6 +153,8 @@ class FilterMasks(desc.Node):
             error = 'No maskFolder specified'
             chunk.logger.error(error)
             raise RuntimeError(error)
+
+        chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
         
         #loading and temporal sort
         chunk.logger.info('Loading masks')
@@ -156,10 +162,15 @@ class FilterMasks(desc.Node):
         sfm_data['views']=sorted(sfm_data['views'], key=lambda v:int(v['frameId']))
 
         #opening images/masks
+        views=[]
         images=[]
         masks=[]
         metas=[]
-        for view in sfm_data['views']:
+        
+        for k, view in enumerate(sfm_data['views']):
+            if not (k >= chunk.range.start and k <= chunk.range.last):
+                continue
+                
             if chunk.node.keepFilename.value:
                 image_basename = os.path.splitext(os.path.basename(view['path']))[0]
             else:
@@ -170,6 +181,7 @@ class FilterMasks(desc.Node):
                 chunk.logger.error(error)
                 raise FileNotFoundError(error)
             
+            views.append((view['viewId'], view['path']))
             chunk.logger.info('Opening '+view['path'])
             img, h_ori, w_ori, PAR, orientation = image.loadImage(view['path'], True)
             images.append(img)
@@ -192,15 +204,15 @@ class FilterMasks(desc.Node):
             
         #saving
         chunk.logger.info('Saving masks')
-        for view, mask, meta in zip(sfm_data['views'], filtered_masks, metas):
+        for view, mask, meta in zip(views, filtered_masks, metas):
+            viewId, viewPath = view
             if chunk.node.keepFilename.value:
-                image_basename = os.path.splitext(os.path.basename(view['path']))[0]
+                image_basename = os.path.splitext(os.path.basename(viewPath))[0]
             else:
-                image_basename = view["viewId"]
+                image_basename = viewId
             filename = os.path.join(chunk.node.outputFolder.value, image_basename+'.'+chunk.node.extension.value)
             if len(mask.shape)<3:
                 mask=np.expand_dims(mask, axis=-1)
             image.writeImage(filename, mask, meta[0], meta[1], meta[3], meta[2])
 
         chunk.logManager.end()
-
