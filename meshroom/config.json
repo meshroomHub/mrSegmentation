@@ -1,0 +1,32 @@
+[
+    {
+        "key": "RDS_RECOGNITION_MODEL_PATH",
+        "type": "path",
+        "value": "../models/ram_plus_swin_large_14m.pth"
+    },
+    {
+        "key": "RDS_DETECTION_CONFIG_PATH",
+        "type": "path",
+        "value": "../models/GroundingDINO_SwinT_OGC.py"
+    },
+    {
+        "key": "RDS_DETECTION_MODEL_PATH",
+        "type": "path",
+        "value": "../models/groundingdino_swint_ogc.pth"
+    },
+    {
+        "key": "RDS_SEGMENTATION_MODEL_PATH",
+        "type": "path",
+        "value": "../models/sam_vit_h_4b8939.pth"
+    },
+    {
+        "key": "RDS_TOKENIZER_PATH",
+        "type": "path",
+        "value": "../models/tokenizer"
+    },
+    {
+        "key": "TRANSFORMERS_OFFLINE",
+        "type": "string",
+        "value": "TRUE"
+    }
+]
