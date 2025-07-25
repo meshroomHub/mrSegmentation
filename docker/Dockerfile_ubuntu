@@ -1,0 +1,68 @@
+ARG CUDA_VERSION
+ARG UBUNTU_VERSION
+FROM nvidia/cuda:${CUDA_VERSION}-devel-ubuntu${UBUNTU_VERSION}
+LABEL maintainer="AliceVision Team alicevision-team@googlegroups.com"
+
+
+ENV MRPLUGIN_DEV=/opt/MeshroomPlugin_dev \
+    MRPLUGIN_BUILD=/tmp/MeshroomPlugin_build \
+    MRPLUGIN_BUNDLE=/opt/MeshroomPlugin
+
+COPY ./ ${MRPLUGIN_DEV}/
+
+## Install Basic Tools
+## ===================
+
+RUN apt-get update
+
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl
+
+# Setup Python
+RUN apt-get install -y software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends python3.11 python3.11-dev python3.11-distutils python3.11-venv \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -s /usr/bin/python3.11 /usr/bin/python \
+    && python -m pip install --upgrade setuptools
+
+## Install the requirements
+## ========================
+
+RUN python -m venv ${MRPLUGIN_BUNDLE}
+
+WORKDIR ${MRPLUGIN_BUNDLE}
+
+RUN ${MRPLUGIN_BUNDLE}/bin/pip install -r ${MRPLUGIN_DEV}/requirements.txt
+RUN sed -i -e 's/cu124/cu121/g' ${MRPLUGIN_DEV}/torch-requirements.txt
+RUN ${MRPLUGIN_BUNDLE}/bin/pip install -r ${MRPLUGIN_DEV}/torch-requirements.txt --upgrade --force-reinstall
+
+
+## Copy nodes and templates
+## ========================
+
+RUN cp -R ${MRPLUGIN_DEV}/meshroom ${MRPLUGIN_BUNDLE}/
+RUN cp -R ${MRPLUGIN_DEV}/segmentationRDS ${MRPLUGIN_BUNDLE}/
+
+
+## Download the models
+## ===================
+
+RUN git clone --depth 1 https://gitlab.com/alicevision/imagepromptnnmodels.git repo && \
+    mv repo/models . && rm -rf repo
+
+
+## Set all the variables
+## =====================
+
+ENV RDS_RECOGNITION_MODEL_PATH="${MRPLUGIN_BUNDLE}/models/ram_plus_swin_large_14m.pth" \
+    RDS_DETECTION_CONFIG_PATH="${MRPLUGIN_BUNDLE}/models/GroundingDINO_SwinT_OGC.py" \
+    RDS_DETECTION_MODEL_PATH="${MRPLUGIN_BUNDLE}/models/groundingdino_swint_ogc.pth" \
+    RDS_SEGMENTATION_MODEL_PATH="${MRPLUGIN_BUNDLE}/models/sam_vit_h_4b8939.pth" \
+    RDS_TOKENIZER_PATH="${MRPLUGIN_BUNDLE}/models/tokenizer" \
+    TRANSFORMERS_OFFLINE="TRUE"
+
+## Clean-up
+## ========
+
+RUN rm -rf share && rm pyvenv.cfg
