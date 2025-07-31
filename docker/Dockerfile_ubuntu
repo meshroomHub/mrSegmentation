@@ -15,7 +15,7 @@ COPY ./ ${MRPLUGIN_DEV}/
 
 RUN apt-get update
 
-RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git curl
+RUN DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends git git-lfs curl
 
 # Setup Python
 RUN apt-get install -y software-properties-common \
@@ -49,7 +49,7 @@ RUN cp -R ${MRPLUGIN_DEV}/segmentationRDS ${MRPLUGIN_BUNDLE}/
 ## ===================
 
 RUN git clone --depth 1 https://gitlab.com/alicevision/imagepromptnnmodels.git repo && \
-    mv repo/models . && rm -rf repo
+    cd repo && git lfs install && git lfs pull && mv models .. && cd .. && rm -rf repo
 
 
 ## Set all the variables

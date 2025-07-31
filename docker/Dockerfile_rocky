@@ -16,7 +16,7 @@ COPY ./ ${MRPLUGIN_DEV}/
 RUN dnf update -y
 
 # Setup Python
-RUN dnf install -y python3.11-devel python3.11-pip git
+RUN dnf install -y python3.11-devel python3.11-pip git git-lfs
 RUN ln -s /usr/bin/python3.11 /usr/bin/python
 RUN python -m pip install --upgrade setuptools
 
@@ -43,7 +43,7 @@ RUN cp -R ${MRPLUGIN_DEV}/segmentationRDS ${MRPLUGIN_BUNDLE}/
 ## ===================
 
 RUN git clone --depth 1 https://gitlab.com/alicevision/imagepromptnnmodels.git repo && \
-    mv repo/models . && rm -rf repo
+    cd repo && git lfs install && git lfs pull && mv models .. && cd .. && rm -rf repo
 
 
 ## Set all the variables
