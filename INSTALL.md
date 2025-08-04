@@ -7,7 +7,7 @@ For the installation, a version of Python >= 3.9 is required.
 It is recommended to install the dependencies of mrSegmentation through a virtual environment. 
 
 > [!TIP]
-> Meshroom expects the virtual environment to be named after the plugin, so the created venv will be named "mrSegmentation".
+> Meshroom expects the virtual environment to be named "venv", otherwise it will not be recognised.
 
 > [!NOTE]  
 > By default, some of the dependencies in the `requirements.txt` file install a CPU-only version of PyTorch. The plugin will run smoothly on the CPU, but for better performances, it is advised to install the GPU-enabled version of PyTorch.
@@ -15,8 +15,8 @@ It is recommended to install the dependencies of mrSegmentation through a virtua
 - On Linux:
 ```
 cd /path/to/mrSegmentation
-python -m venv mrSegmentation
-source mrSegmentation/bin/activate
+python -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
 
 # For GPU support (optional)
@@ -28,8 +28,8 @@ deactivate
 - On Windows:
 ```
 cd /path/to/mrSegmentation
-python -m venv mrSegmentation
-.\mrSegmentation\Scripts\activate.bat
+python -m venv venv
+.\venv\Scripts\activate.bat
 pip install -r requirements.txt
 
 # For GPU support (optional)
