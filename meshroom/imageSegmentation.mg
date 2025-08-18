@@ -1,10 +1,9 @@
 {
     "header": {
-        "releaseVersion": "2025.1.0-develop",
+        "releaseVersion": "2025.1.0",
         "fileVersion": "2.0",
         "nodesVersions": {
             "CameraInit": "12.0",
-            "ImageBiRefNetMatting": "0.2",
             "ImageDetectionPrompt": "0.1",
             "ImageSegmentationBox": "0.2",
             "Publish": "1.3"
@@ -20,17 +19,6 @@
             ],
             "inputs": {}
         },
-        "ImageBiRefNetMatting_1": {
-            "nodeType": "ImageBiRefNetMatting",
-            "position": [
-                400,
-                -80
-            ],
-            "inputs": {
-                "input": "{ImageDetectionPrompt_1.input}",
-                "bboxFolder": "{ImageDetectionPrompt_1.output}"
-            }
-        },
         "ImageDetectionPrompt_1": {
             "nodeType": "ImageDetectionPrompt",
             "position": [
@@ -45,7 +33,7 @@
             "nodeType": "ImageSegmentationBox",
             "position": [
                 400,
-                60
+                0
             ],
             "inputs": {
                 "input": "{ImageDetectionPrompt_1.input}",
@@ -61,8 +49,7 @@
             ],
             "inputs": {
                 "inputFiles": [
-                    "{ImageSegmentationBox_1.output}",
-                    "{ImageBiRefNetMatting_1.output}"
+                    "{ImageSegmentationBox_1.output}"
                 ]
             }
         }
