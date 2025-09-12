@@ -53,7 +53,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             values=["exr", "png", "jpg"],
             exclusive=True,
             group="",  # remove from command line params
-            enabled=lambda node: Path(node.chunk.input.value).is_dir(),
+            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
             name="recognitionModelPath",
@@ -79,7 +79,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=False,
-            enabled=lambda node: node.outputTaggedImage.value,
+            enabled=lambda node: node.outputTaggedImage.value and not Path(node.input.value).is_dir(),
         ),
         desc.ChoiceParam(
             name="extensionOut",

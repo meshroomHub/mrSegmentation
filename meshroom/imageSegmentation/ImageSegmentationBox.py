@@ -64,7 +64,7 @@ In case neither tracker nor json file is available, the model is applied on the 
             values=["exr", "png", "jpg"],
             exclusive=True,
             group="",  # remove from command line params
-            enabled=lambda node: Path(node.chunk.input.value).is_dir(),
+            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
             name="bboxFolder",
@@ -102,6 +102,7 @@ In case neither tracker nor json file is available, the model is applied on the 
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=False,
+            enabled=lambda node: not Path(node.input.value).is_dir(),
         ),
         desc.ChoiceParam(
             name="extensionOut",

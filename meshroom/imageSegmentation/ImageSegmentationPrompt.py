@@ -58,7 +58,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             values=["exr", "png", "jpg"],
             exclusive=True,
             group="",  # remove from command line params
-            enabled=lambda node: Path(node.chunk.input.value).is_dir(),
+            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
             name="recognitionModelPath",
@@ -136,6 +136,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=False,
+            enabled=lambda node: not Path(node.input.value).is_dir(),
         ),
         desc.ChoiceParam(
             name="extensionOut",
