@@ -4,9 +4,9 @@
         "fileVersion": "2.0",
         "nodesVersions": {
             "CameraInit": "12.0",
+            "CopyFiles": "1.3",
             "ImageDetectionPrompt": "0.1",
-            "ImageSegmentationBox": "0.2",
-            "Publish": "1.3"
+            "ImageSegmentationBox": "0.2"
         },
         "template": true
     },
@@ -41,8 +41,8 @@
                 "keepFilename": true
             }
         },
-        "Publish_1": {
-            "nodeType": "Publish",
+        "CopyFiles_1": {
+            "nodeType": "CopyFiles",
             "position": [
                 600,
                 0
