@@ -8,24 +8,25 @@ from meshroom.core.utils import VERBOSE_LEVEL
 
 class ImageSegmentationBoxNodeSize(desc.MultiDynamicNodeSize):
     def computeSize(self, node):
+        if node.attribute(self._params[0]).isLink:
+            return node.attribute(self._params[0]).inputLink.node.size
+
         from pathlib import Path
-        import itertools
 
         input_path_param = node.attribute(self._params[0])
         extension_param = node.attribute(self._params[1])
-
         input_path = input_path_param.value
         extension = extension_param.value
         include_suffixes = [extension.lower(), extension.upper()]
 
         size = 1
         if Path(input_path).is_dir():
+            import itertools
             image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
             size = len(image_paths)
-        elif node.attribute(self._params[0]).isLink:
-            size = node.attribute(self._params[0]).inputLink.node.size
         
         return size
+        
 class ImageSegmentationBox(desc.Node):
     size = ImageSegmentationBoxNodeSize(['input', 'extensionIn'])
     gpu = desc.Level.INTENSIVE
