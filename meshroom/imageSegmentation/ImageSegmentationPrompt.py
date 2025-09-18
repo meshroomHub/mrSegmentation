@@ -1,13 +1,34 @@
-__version__ = "0.1"
+__version__ = "0.2"
 
 import os
+from pathlib import Path
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 
+class ImageSegmentationPromptNodeSize(desc.MultiDynamicNodeSize):
+    def computeSize(self, node):
+        if node.attribute(self._params[0]).isLink:
+            return node.attribute(self._params[0]).inputLink.node.size
+
+        from pathlib import Path
+
+        input_path_param = node.attribute(self._params[0])
+        extension_param = node.attribute(self._params[1])
+        input_path = input_path_param.value
+        extension = extension_param.value
+        include_suffixes = [extension.lower(), extension.upper()]
+
+        size = 1
+        if Path(input_path).is_dir():
+            import itertools
+            image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
+            size = len(image_paths)
+        
+        return size
 
 class ImageSegmentationPrompt(desc.Node):
-    size = desc.DynamicNodeSize("input")
+    size = ImageSegmentationPromptNodeSize(['input', 'extensionIn'])
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
@@ -25,8 +46,19 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
         desc.File(
             name="input",
             label="Input",
-            description="SfMData file input.",
+            description="Folder or SfMData file.",
             value="",
+        ),
+        desc.ChoiceParam(
+            name="extensionIn",
+            label="Input File Extension",
+            description="Input image file extension.\n"
+                        "Considered only if input is a folder.",
+            value="exr",
+            values=["exr", "png", "jpg"],
+            exclusive=True,
+            group="",  # remove from command line params
+            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
             name="recognitionModelPath",
@@ -104,9 +136,10 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=False,
+            enabled=lambda node: not Path(node.input.value).is_dir(),
         ),
         desc.ChoiceParam(
-            name="extension",
+            name="extensionOut",
             label="Output File Extension",
             description="Output image file extension.\n"
                         "If unset, the output file extension will match the input's if possible.",
@@ -143,7 +176,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
-            value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
+            value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
             group="",
         ),
         desc.File(
@@ -157,24 +190,35 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
         ),
     ]
 
-    def resolvedPaths(self, inputSfm, outDir, keepFilename, ext):
+    def resolvedPaths(self, input_path, extensionIn, outDir, keepFilename, extensionOut):
         from pyalicevision import sfmData
         from pyalicevision import sfmDataIO
         from pathlib import Path
+        import itertools
 
+        include_suffixes = [extensionIn.lower(), extensionIn.upper()]
         paths = {}
-        dataAV = sfmData.SfMData()
-        if sfmDataIO.load(dataAV, inputSfm, sfmDataIO.ALL) and os.path.isdir(outDir):
-            views = dataAV.getViews()
-            for id, v in views.items():
-                inputFile = v.getImage().getImagePath()
-                if keepFilename:
-                    outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + ext)
-                    outputFileBoxes = os.path.join(outDir, Path(inputFile).stem + "_bboxes" + ".jpg")
-                else:
-                    outputFileMask = os.path.join(outDir, str(id) + "." + ext)
-                    outputFileBoxes = os.path.join(outDir, str(id) + "_bboxes" + ".jpg")
-                paths[inputFile] = (outputFileMask, outputFileBoxes)
+        if Path(input_path).is_dir():
+            input_filepaths = sorted(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
+            for frameId, inputFile in enumerate(input_filepaths):
+                outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extensionOut)
+                outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
+                paths[str(inputFile)] = (outputFileMask, outputFileBoxes, frameId)
+        elif Path(input_path).suffix.lower() in [".sfm", ".abc"]:
+            if Path(input_path).exists():
+                dataAV = sfmData.SfMData()
+                if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL) and os.path.isdir(outDir):
+                    views = dataAV.getViews()
+                    for id, v in views.items():
+                        inputFile = v.getImage().getImagePath()
+                        frameId = v.getFrameId()
+                        if keepFilename:
+                            outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extensionOut)
+                            outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
+                        else:
+                            outputFileMask = os.path.join(outDir, str(id) + "." + extensionOut)
+                            outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".jpg")
+                        paths[inputFile] = (outputFileMask, outputFileBoxes, frameId)
 
         return paths
 
@@ -194,7 +238,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
 
             chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
-            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extension.value)
+            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.extensionIn.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extensionOut.value)
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
