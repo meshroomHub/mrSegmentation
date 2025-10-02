@@ -185,7 +185,7 @@ class FilterMasks(desc.Node):
         
         kargs={}
         for a in chunk.node.attributes:
-            if a.attributeDesc.group=='opt':
+            if a.desc.group=='opt':
                 kargs[a.name]=a.value 
         chunk.logger.info(kargs)
         filtered_masks = filter_function(masks,images=images,**kargs)
