@@ -194,6 +194,7 @@ In case neither tracker nor json file is available, the model is applied on the 
         from segmentationRDS import image, segmentation, nktracker
         import numpy as np
         import torch
+        from pyalicevision import image as avimg
 
         processor = None
         try:
@@ -228,6 +229,10 @@ In case neither tracker nor json file is available, the model is applied on the 
                         with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
                             bb = json.load(bboxFile)
                             bboxDict.update(bb)
+
+            metadata_deep_model = {}
+            metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
+            metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam_vit_h_4b8939"
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
@@ -269,7 +274,15 @@ In case neither tracker nor json file is available, the model is applied on the 
                                              invert = chunk.node.maskInvert.value,
                                              verbose = False)
 
-                    image.writeImage(oFile[0], mask, h_ori, w_ori, orientation, PAR)
+                    optWrite = avimg.ImageWriteOptions()
+                    if Path(oFile[0]).suffix.lower() == ".exr":
+                        optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                        optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                        optWrite.exrCompressionLevel(300)
+                    else:
+                        optWrite.toColorSpace(avimg.EImageColorSpace_SRGB)
+
+                    image.writeImage(oFile[0], mask, h_ori, w_ori, orientation, PAR, metadata_deep_model, optWrite)
 
                     if chunk.node.outputBboxImage.value:
                         bbox_img = img.copy()
