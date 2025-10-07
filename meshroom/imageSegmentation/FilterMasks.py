@@ -5,6 +5,24 @@ import os
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 
+
+class FilterParallelization(desc.Parallelization):
+    """
+    Custom parallelization class used to get a single chunk for specific filters
+    """
+    def __init__(self, *args, **kwargs):
+        super().__init__(self, *args, **kwargs)
+
+    def getSizes(self, node):
+        """
+        Returns: (blockSize, fullSize, nbBlocks)
+        """
+        if node.filterType.value == "temporal_filtering":
+            return node.size, node.size, 1
+        else:
+            return desc.Parallelization.getSizes(self, node)
+
+
 class FilterMasks(desc.Node):
 
     category = 'Utils'
@@ -12,8 +30,8 @@ class FilterMasks(desc.Node):
     
     size = desc.DynamicNodeSize("inputSfM")
     cpu = desc.Level.INTENSIVE
-    parallelization = desc.Parallelization(blockSize=50)
-
+    parallelization = FilterParallelization(blockSize=50)
+    
     inputs = [
         desc.File(
             name='maskFolder',
@@ -106,13 +124,13 @@ class FilterMasks(desc.Node):
         ),
 
         desc.ChoiceParam(
-                name='verboseLevel',
-                label='Verbose Level',
-                description='''verbosity level (fatal, error, warning, info, debug, trace).''',
-                value='info',
-                values=VERBOSE_LEVEL,
-                exclusive=True,
-            ),
+            name='verboseLevel',
+            label='Verbose Level',
+            description='''verbosity level (fatal, error, warning, info, debug, trace).''',
+            value='info',
+            values=VERBOSE_LEVEL,
+            exclusive=True,
+        ),
 
     ]
 
@@ -153,24 +171,30 @@ class FilterMasks(desc.Node):
             error = 'No maskFolder specified'
             chunk.logger.error(error)
             raise RuntimeError(error)
-
-        chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
+        
+        chunk.logger.info(f"chunk : {chunk.range.toDict()}")
+        
+        nb_chunks = (chunk.range.fullSize//chunk.range.blockSize) + (1 if chunk.range.fullSize%chunk.range.blockSize else 0)
+        if nb_chunks > 1:
+            chunk.logger.info(f"Process chunk {chunk.range.iteration+1}/{nb_chunks} (size={chunk.range.effectiveBlockSize})")
+            chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
         
         #loading and temporal sort
         chunk.logger.info('Loading masks')
         sfm_data=json.load(open(chunk.node.inputSfM.value,'r'))
         sfm_data['views']=sorted(sfm_data['views'], key=lambda v:int(v['frameId']))
-
-        #opening images/masks
-        views=[]
-        images=[]
-        masks=[]
-        metas=[]
         
-        for k, view in enumerate(sfm_data['views']):
-            if not (k >= chunk.range.start and k <= chunk.range.last):
-                continue
-                
+        # Build filter kernel & args
+        filter_function = eval('filtering.Operations.'+chunk.node.filterType.value)
+        kargs={}
+        for a in chunk.node.attributes:
+            if a.attributeDesc.group=='opt':
+                kargs[a.name]=a.value 
+        chunk.logger.info(f"Filter {chunk.node.filterType.value} : args={kargs}")
+        
+        def process_individual_frame(view):
+            chunk.logger.info(f"Processing view {view['viewId']}")
+            
             if chunk.node.keepFilename.value:
                 image_basename = os.path.splitext(os.path.basename(view['path']))[0]
             else:
@@ -181,38 +205,123 @@ class FilterMasks(desc.Node):
                 chunk.logger.error(error)
                 raise FileNotFoundError(error)
             
-            views.append((view['viewId'], view['path']))
             chunk.logger.info('Opening '+view['path'])
             img, h_ori, w_ori, PAR, orientation = image.loadImage(view['path'], True)
-            images.append(img)
-
             chunk.logger.info('Opening '+mask_file)
             mask_img, h_ori, w_ori, PAR, orientation = image.loadImage(mask_file, True)
-            masks.append(mask_img)
-            metas.append((h_ori, w_ori, PAR, orientation))
-
-        #filter
-        chunk.logger.info('Applying filter')
-        filter_function = eval('filtering.Operations.'+chunk.node.filterType.value)
-        
-        kargs={}
-        for a in chunk.node.attributes:
-            if a.desc.group=='opt':
-                kargs[a.name]=a.value 
-        chunk.logger.info(kargs)
-        filtered_masks = filter_function(masks,images=images,**kargs)
             
-        #saving
-        chunk.logger.info('Saving masks')
-        for view, mask, meta in zip(views, filtered_masks, metas):
-            viewId, viewPath = view
-            if chunk.node.keepFilename.value:
-                image_basename = os.path.splitext(os.path.basename(viewPath))[0]
-            else:
-                image_basename = viewId
+            #filter
+            chunk.logger.info('Applying filter')
+            
+            filtered_masks = filter_function([mask_img], images=[img], **kargs)
+            mask = filtered_masks[0]
+                
+            #saving
+            chunk.logger.info('Saving masks')
             filename = os.path.join(chunk.node.outputFolder.value, image_basename+'.'+chunk.node.extension.value)
             if len(mask.shape)<3:
                 mask=np.expand_dims(mask, axis=-1)
-            image.writeImage(filename, mask, meta[0], meta[1], meta[3], meta[2])
+            image.writeImage(filename, mask, h_ori, w_ori, orientation, PAR)
+        
+        def process_all_frames():
+            #opening images/masks
+            views=[]
+            images=[]
+            masks=[]
+            metas=[]
+            
+            for view in sfm_data['views']:
+                if chunk.node.keepFilename.value:
+                    image_basename = os.path.splitext(os.path.basename(view['path']))[0]
+                else:
+                    image_basename = view['viewId']
+                mask_file = os.path.join(chunk.node.maskFolder.value, image_basename+'.'+chunk.node.extension.value)
+                if not os.path.exists(mask_file):
+                    error = mask_file+" not found."
+                    chunk.logger.error(error)
+                    raise FileNotFoundError(error)
+                
+                views.append((view['viewId'], view['path']))
+                chunk.logger.info('Opening '+view['path'])
+                img, h_ori, w_ori, PAR, orientation = image.loadImage(view['path'], True)
+                images.append(img)
+
+                chunk.logger.info('Opening '+mask_file)
+                mask_img, h_ori, w_ori, PAR, orientation = image.loadImage(mask_file, True)
+                masks.append(mask_img)
+                metas.append((h_ori, w_ori, PAR, orientation))
+
+            #filter
+            chunk.logger.info(f'Applying filter on {len(masks)} masks')
+            filtered_masks = filter_function(masks, images=images, **kargs)
+                    
+            #saving
+            chunk.logger.info('Saving masks')
+            for view, mask, meta in zip(views, filtered_masks, metas):
+                viewId, viewPath = view
+                if chunk.node.keepFilename.value:
+                    image_basename = os.path.splitext(os.path.basename(viewPath))[0]
+                else:
+                    image_basename = viewId
+                filename = os.path.join(chunk.node.outputFolder.value, image_basename+'.'+chunk.node.extension.value)
+                if len(mask.shape)<3:
+                    mask=np.expand_dims(mask, axis=-1)
+                image.writeImage(filename, mask, meta[0], meta[1], meta[3], meta[2])
+        
+        def process_chunk_frames():
+            #opening images/masks
+            views=[]
+            images=[]
+            masks=[]
+            metas=[]
+            
+            for k, view in enumerate(sfm_data['views']):
+                if not(k >= chunk.range.start and k <= chunk.range.last):
+                    continue
+                
+                if chunk.node.keepFilename.value:
+                    image_basename = os.path.splitext(os.path.basename(view['path']))[0]
+                else:
+                    image_basename = view['viewId']
+                mask_file = os.path.join(chunk.node.maskFolder.value, image_basename+'.'+chunk.node.extension.value)
+                if not os.path.exists(mask_file):
+                    error = mask_file+" not found."
+                    chunk.logger.error(error)
+                    raise FileNotFoundError(error)
+                
+                views.append((view['viewId'], view['path']))
+                chunk.logger.info('Opening '+view['path'])
+                img, h_ori, w_ori, PAR, orientation = image.loadImage(view['path'], True)
+                images.append(img)
+
+                chunk.logger.info('Opening '+mask_file)
+                mask_img, h_ori, w_ori, PAR, orientation = image.loadImage(mask_file, True)
+                masks.append(mask_img)
+                metas.append((h_ori, w_ori, PAR, orientation))
+
+            #filter
+            chunk.logger.info(f'Applying filter on {len(masks)} masks')
+            filtered_masks = filter_function(masks, images=images, **kargs)
+                    
+            #saving
+            chunk.logger.info('Saving masks')
+            for view, mask, meta in zip(views, filtered_masks, metas):
+                viewId, viewPath = view
+                if chunk.node.keepFilename.value:
+                    image_basename = os.path.splitext(os.path.basename(viewPath))[0]
+                else:
+                    image_basename = viewId
+                filename = os.path.join(chunk.node.outputFolder.value, image_basename+'.'+chunk.node.extension.value)
+                if len(mask.shape)<3:
+                    mask=np.expand_dims(mask, axis=-1)
+                image.writeImage(filename, mask, meta[0], meta[1], meta[3], meta[2])
+        
+        if chunk.node.filterType.value == "temporal_filtering":
+            process_all_frames()
+        else:
+            process_chunk_frames()
+            # for k, view in enumerate(sfm_data['views']):
+            #     if k >= chunk.range.start and k <= chunk.range.last:
+            #         process_individual_frame(view)
 
         chunk.logManager.end()
