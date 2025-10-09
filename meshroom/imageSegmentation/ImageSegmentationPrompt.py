@@ -184,7 +184,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             label="BBoxes",
             description="Generated images with bounded boxes baked in.",
             semantic="image",
-            value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "_bboxes.jpg",
+            value=lambda attr: "{nodeCacheFolder}/bboxes_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".jpg",
             enabled=lambda node: node.outputBboxImage.value,
             group="",
         ),
