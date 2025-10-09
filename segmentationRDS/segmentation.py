@@ -214,7 +214,7 @@ class SegmentAnything:
                 if p[0] >= 0 and p[0] < w and p[1] >= 0 and p[1] < h:
                     clicks.append(p)
                     labels.append(point_labels[k])
-            if len(clicks) and sum(labels) > 0:
+            if len(clicks) > 0 and sum(labels) > 0:
                 masks, scores, logits = self.sam_predictor.predict(point_coords=np.array(clicks), point_labels=np.array(labels), multimask_output=True)
                 index = np.argmax(scores)
                 result_masks.append(masks[index])
