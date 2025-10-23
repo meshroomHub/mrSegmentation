@@ -225,6 +225,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
     def processChunk(self, chunk):
         from segmentationRDS import image, segmentation
         import torch
+        from pyalicevision import image as avimg
 
         processor = None
         try:
@@ -256,6 +257,10 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             synonyms = chunk.node.synonyms.value.replace("\n", ",")
             chunk.logger.debug("synonyms: {}".format(synonyms))
 
+            metadata_deep_model = {}
+            metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
+            metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam_vit_h_4b8939"
+
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
                     img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
@@ -273,7 +278,15 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
                     chunk.logger.debug("bboxes: {}".format(bboxes))
                     chunk.logger.debug("confidence: {}".format(conf))
 
-                    image.writeImage(oFile[0], mask, h_ori, w_ori, orientation, PAR)
+                    optWrite = avimg.ImageWriteOptions()
+                    if Path(oFile[0]).suffix.lower() == ".exr":
+                        optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                        optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                        optWrite.exrCompressionLevel(300)
+                    else:
+                        optWrite.toColorSpace(avimg.EImageColorSpace_SRGB)
+
+                    image.writeImage(oFile[0], mask, h_ori, w_ori, orientation, PAR, metadata_deep_model, optWrite)
 
                     if (chunk.node.outputBboxImage.value):
                         imgBoxes = (img * 255.0).astype("uint8")
