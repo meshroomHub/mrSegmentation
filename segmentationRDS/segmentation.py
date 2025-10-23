@@ -206,6 +206,18 @@ class SegmentAnything:
     def segment(self, image_uint8: np.ndarray, xyxy: np.ndarray, point_coords: np.ndarray, point_labels: np.ndarray) -> np.ndarray:
         self.sam_predictor.set_image(image_uint8)
         result_masks = []
+        if xyxy.size == 0 and point_coords.size > 0:
+            clicks = []
+            labels = []
+            h, w, _ = image_uint8.shape
+            for k,p in enumerate(point_coords):
+                if p[0] >= 0 and p[0] < w and p[1] >= 0 and p[1] < h:
+                    clicks.append(p)
+                    labels.append(point_labels[k])
+            if len(clicks) > 0 and sum(labels) > 0:
+                masks, scores, logits = self.sam_predictor.predict(point_coords=np.array(clicks), point_labels=np.array(labels), multimask_output=True)
+                index = np.argmax(scores)
+                result_masks.append(masks[index])
         for box in xyxy:
             clicks = []
             labels = []

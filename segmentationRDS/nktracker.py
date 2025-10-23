@@ -253,8 +253,9 @@ class nkTracker:
             bbT = None
             bbS = None
             x = getValueAtFrame(self.tracks[key]['track_x']['curve'], frameId)
-            y = getValueAtFrame(self.tracks[key]['track_y']['curve'], frameId) / par
-            if x is not None:
+            y = getValueAtFrame(self.tracks[key]['track_y']['curve'], frameId)
+            if y is not None:
+                y = y / par
                 bbT_TL_x = x + self.tracks[key]['pattern_x']
                 bbT_TL_y = y + self.tracks[key]['pattern_t']
                 bbT_BR_x = x + self.tracks[key]['pattern_r']

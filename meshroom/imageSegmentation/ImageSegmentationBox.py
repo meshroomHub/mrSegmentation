@@ -47,6 +47,7 @@ The only requirement for the tracker file is about the tracks names. To be consi
 
 The bounding boxes coming from the Nuke tracker are appended to the ones coming from the json file if any.
 In case neither tracker nor json file is available, the model is applied on the full image.
+In case bounding boxes and clicks are provided, only clicks inside bounding boxes are considered.
 """
 
     inputs = [
