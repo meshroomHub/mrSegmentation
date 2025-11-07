@@ -171,7 +171,7 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
             for frameId, inputFile in enumerate(input_filepaths):
                 outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extensionOut)
                 outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
-                paths[str(inputFile)] = (outputFileMask, outputFileBoxes, frameId)
+                paths[str(inputFile)] = (outputFileMask, outputFileBoxes, frameId, 'not_a_view')
         elif Path(input_path).suffix.lower() in [".sfm", ".abc"]:
             if Path(input_path).exists():
                 dataAV = sfmData.SfMData()
@@ -186,7 +186,7 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
                         else:
                             outputFileMask = os.path.join(outDir, str(id) + "." + extensionOut)
                             outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".jpg")
-                        paths[inputFile] = (outputFileMask, outputFileBoxes, frameId)
+                        paths[inputFile] = (outputFileMask, outputFileBoxes, frameId, str(id))
 
         return paths
 
@@ -223,13 +223,23 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
             processor = segmentation.SegmentAnything(SAM_CHECKPOINT_PATH = chunk.node.segmentationModelPath.evalValue,
                                                      useGPU = chunk.node.useGpu.value)
 
-            bboxDict = {}
+            bboxDictFromShape = {}
             if chunk.node.bboxFolder.value:
                 for file in os.listdir(chunk.node.bboxFolder.value):
-                    if file.endswith(".json"):
-                        with open(os.path.join(chunk.node.bboxFolder.value,file)) as bboxFile:
-                            bb = json.load(bboxFile)
-                            bboxDict.update(bb)
+                    if file.endswith("shapes.json"):
+                        with open(os.path.join(chunk.node.bboxFolder.value,file)) as shapeFile:
+                            shapes = json.load(shapeFile)
+                            for shape in shapes["shapes"]:
+                                for key in shape["observations"]:
+                                    xc = shape["observations"][key]["center"]["x"]
+                                    yc = shape["observations"][key]["center"]["y"]
+                                    w = shape["observations"][key]["size"]["width"]
+                                    h = shape["observations"][key]["size"]["height"]
+                                    bb = [xc - w/2, yc - h/2, xc + w/2, yc + h/2]
+                                    if key in bboxDictFromShape:
+                                        bboxDictFromShape[key].append(bb)
+                                    else:
+                                        bboxDictFromShape[key] = [bb]
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
@@ -246,7 +256,7 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
                     if not chunk.node.nukeTracker.value and not chunk.node.bboxFolder.value:
                         bboxes = [[0, 0, img.shape[1] - 1, img.shape[0] - 1]]
                     elif chunk.node.bboxFolder.value:
-                        bboxes = bboxDict[iFile]["bboxes"]
+                        bboxes = bboxDictFromShape[iFile if oFile[3] == "not_a_view" else oFile[3]]
 
                     clicksIn = []
                     clicksOut = []

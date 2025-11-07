@@ -183,7 +183,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             for frameId, inputFile in enumerate(input_filepaths):
                 outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extensionOut)
                 outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
-                paths[str(inputFile)] = (outputFileMask, outputFileBoxes, frameId)
+                paths[str(inputFile)] = (outputFileMask, outputFileBoxes, frameId, 'not_a_view')
         elif Path(input_path).suffix.lower() in [".sfm", ".abc"]:
             if Path(input_path).exists():
                 dataAV = sfmData.SfMData()
@@ -198,7 +198,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
                         else:
                             outputFileMask = os.path.join(outDir, str(id) + "." + extensionOut)
                             outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".jpg")
-                        paths[inputFile] = (outputFileMask, outputFileBoxes, frameId)
+                        paths[inputFile] = (outputFileMask, outputFileBoxes, frameId, str(id))
 
         return paths
 
@@ -237,6 +237,7 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             chunk.logger.debug("synonyms: {}".format(synonyms))
 
             dict = {}
+            shapeBboxes = {"shapes": []}
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
@@ -262,6 +263,26 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
                     imgInfo["synonyms"] = synonyms.split(",")
                     dict[iFile] = imgInfo
 
+                    for k in range(0, len(bboxes)):
+                        x1, y1, x2, y2 = bboxes[k].tolist()
+                        if k+1 > len(shapeBboxes["shapes"]):
+                            shape_bbox = {
+                                "name": "BBox_" + str(k),
+                                "type": "Rectangle",
+                                "properties": {
+                                    "color": "red"},
+                                "observations" : {}}
+                            shapeBboxes["shapes"].append(shape_bbox)
+                        shapeBboxes["shapes"][k]["observations"][iFile if oFile[3] == "not_a_view" else oFile[3]] = {
+                            "center" : {
+                                "x": (x2 + x1) / 2,
+                                "y": (y2 + y1) / 2
+                                },
+                            "size" : {
+                                "width": x2 - x1,
+                                "height": y2 - y1
+                                }}
+
                     if (chunk.node.outputBboxImage.value):
                         imgBoxes = (img * 255.0).astype("uint8")
                         for bbox in bboxes:
@@ -273,6 +294,10 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             outfile = open(jsonFilename, "w")
             outfile.write(jsonObject)
             outfile.close()
+
+            shapeFilename = chunk.node.output.value + "/" + str(chunk.index) + ".shapes.json"
+            with open(shapeFilename, 'w') as of_json:
+                json.dump(shapeBboxes, of_json, indent=4)
 
         finally:
             del processor
