@@ -53,6 +53,61 @@ def apply_orientation(oiio_image, orientation, reverse: bool = False):
         oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
     return oiio_image
 
+def fromUsualToRawOrientation(x, y, width, height, PAR, orientation):
+    x1 = x
+    y1 = y
+    if orientation == 2:
+        x1 = width - x - 1
+    elif orientation == 3:
+        x1 = width - x - 1
+        y1 = int(height / PAR) - y - 1
+    elif orientation == 4:
+        y1 = int(height / PAR) - y - 1
+    elif orientation == 5:
+        xtmp = y
+        y1 = x
+        x1 = xtmp
+    elif orientation == 6:
+        xtmp = y
+        y1 = width - x - 1
+        x1 = xtmp
+    elif orientation == 7:
+        xtmp = int(height / PAR) - y - 1
+        y1 = width - x - 1
+        x1 = xtmp
+    elif orientation == 8:
+        xtmp = int(height / PAR) - y - 1
+        y1 = x
+        x1 = xtmp
+    return(x1, y1 * PAR)
+
+def fromRawToUsualOrientation(x, y, width, height, PAR, orientation):
+    x1 = x
+    y1 = y / PAR
+    if orientation == 2:
+        x1 = width - x - 1
+    elif orientation == 3:
+        x1 = width - x - 1
+        y1 = int(height / PAR) - y1 - 1
+    elif orientation == 4:
+        y1 = int(height / PAR) - y1 - 1
+    elif orientation == 5:
+        xtmp = int(height / PAR) - y1 - 1
+        y1 = width - x - 1
+        x1 = xtmp
+    elif orientation == 6:
+        xtmp = width - y1 - 1
+        y1 = x
+        x1 = xtmp
+    elif orientation == 7:
+        xtmp = y1
+        y1 = x
+        x1 = xtmp
+    elif orientation == 8:
+        xtmp = y1
+        y1 = int(height / PAR) - x - 1
+        x1 = xtmp
+    return(x1, y1)
 
 def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = True):
     oiio_input = oiio.ImageInput.open(imagePath)
