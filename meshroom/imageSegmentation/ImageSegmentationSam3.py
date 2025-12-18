@@ -27,7 +27,7 @@ class Sam3NodeSize(desc.MultiDynamicNodeSize):
         
         return size
         
-class Sam3(desc.Node):
+class ImageSegmentationSam3(desc.Node):
     size = Sam3NodeSize(['input', 'extensionIn'])
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
