@@ -160,6 +160,30 @@ In order to associate a point to a given sub mask, it must be colored with the c
                 keyType="viewId",
             ),
         ),
+        desc.ShapeList(
+            name="positiveBoxes",
+            label="Positive Boxes",
+            description="Prompt: Positive Bounding Boxes",
+            shape=desc.Rectangle(
+                name="bbox",
+                label="Bounding Box",
+                description="Rectangle.",
+                keyable=True,
+                keyType="viewId",
+            ),
+        ),
+        desc.ShapeList(
+            name="negativeBoxes",
+            label="Negative Boxes",
+            description="Prompt: Negative Bounding Boxes",
+            shape=desc.Rectangle(
+                name="bbox",
+                label="Bounding Box",
+                description="Rectangle.",
+                keyable=True,
+                keyType="viewId",
+            ),
+        ),
     ]
 
     outputs = [
@@ -233,6 +257,55 @@ In order to associate a point to a given sub mask, it must be colored with the c
         normalized_click[1] /= img_h
         return normalized_click
 
+    def getBboxDictWithViewIdAsKeyFromShape(self, shape):
+        bboxDictFromShape = {}
+        shapesBBoxesIn = shape.getShapesAsDict()
+        if shapesBBoxesIn:
+            for sh in shapesBBoxesIn:
+                for key in sh["observations"]:
+                    xc = sh["observations"][key]["center"]["x"]
+                    yc = sh["observations"][key]["center"]["y"]
+                    w = sh["observations"][key]["size"]["width"]
+                    h = sh["observations"][key]["size"]["height"]
+                    bb = [xc - w/2, yc - h/2, w, h]
+                    if key in bboxDictFromShape:
+                        bboxDictFromShape[key].append(bb)
+                    else:
+                        bboxDictFromShape[key] = [bb]
+        return bboxDictFromShape
+
+    def normalize_bbox(self, bbox_xywh, img_w, img_h, PAR, orientation):
+        import torch
+        from segmentationRDS import image
+        # Assumes bbox_xywh is in XYWH format
+        if isinstance(bbox_xywh, list):
+            assert (
+                len(bbox_xywh) == 4
+            ), "bbox_xywh list must have 4 elements. Batching not support except for torch tensors."
+            normalized_bbox = bbox_xywh.copy()
+            normalized_bbox[0], normalized_bbox[1] = image.fromRawToUsualOrientation(normalized_bbox[0], normalized_bbox[1], img_w, img_h, PAR, orientation)
+            normalized_bbox[2], normalized_bbox[3] = image.fromRawToUsualOrientation(normalized_bbox[2], normalized_bbox[3], img_w, img_h, PAR, orientation)
+            normalized_bbox[0] /= img_w
+            normalized_bbox[1] /= img_h
+            normalized_bbox[2] /= img_w
+            normalized_bbox[3] /= img_h
+        else:
+            assert isinstance(
+                bbox_xywh, torch.Tensor
+            ), "Only torch tensors are supported for batching."
+            normalized_bbox = bbox_xywh.clone()
+            assert (
+                normalized_bbox.size(-1) == 4
+            ), "bbox_xywh tensor must have last dimension of size 4."
+            normalized_bbox[..., 0], normalized_bbox[..., 1] = image.fromRawToUsualOrientation(normalized_bbox[..., 0], normalized_bbox[..., 1], img_w, img_h, PAR, orientation)
+            normalized_bbox[..., 2], normalized_bbox[..., 3] = image.fromRawToUsualOrientation(normalized_bbox[..., 2], normalized_bbox[..., 3], img_w, img_h, PAR, orientation)
+            normalized_bbox[..., 0] /= img_w
+            normalized_bbox[..., 1] /= img_h
+            normalized_bbox[..., 2] /= img_w
+            normalized_bbox[..., 3] /= img_h
+        return normalized_bbox
+
+
     def preprocess(self, node):
         extension = node.extensionIn.value
         input_path = node.input.value
@@ -251,7 +324,6 @@ In order to associate a point to a given sub mask, it must be colored with the c
         from pyalicevision import image as avimg
         from PIL import Image
 
-        processor = None
         try:
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
@@ -260,8 +332,6 @@ In order to associate a point to a given sub mask, it must be colored with the c
                 return
             if not chunk.node.output.value:
                 return
-            if not chunk.node.prompt.value:
-                chunk.logger.warning("No Prompt, the full image will be segmented")
 
             chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
@@ -275,6 +345,8 @@ In order to associate a point to a given sub mask, it must be colored with the c
 
             posClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.positiveClicks)
             negClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.negativeClicks)
+            posBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.positiveBoxes)
+            negBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.negativeBoxes)
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
@@ -282,6 +354,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
 
             pil_images = []
             clicks = {}
+            bboxes = {}
 
             colors=[[255,0,0],[0,255,0],[0,0,255],[255,255,0],[255,0,255],[0,255,255],
                     [255,0,128],[0,255,128],[0,128,255],[255,255,128],[255,128,255],[128,255,255],
@@ -327,7 +400,24 @@ In order to associate a point to a given sub mask, it must be colored with the c
                 if len(objects) > 0:
                     clicks[frameId] = objects
 
-            #print(clicks)
+                if viewId is not None and str(viewId) in posBboxDictFromShape:
+                    if frameId not in bboxes:
+                        bboxes[frameId] = ([],[])
+                    for bbox in posBboxDictFromShape[viewId]:
+                        bbox = self.normalize_bbox(bbox, img.shape[1], img.shape[0], PAR, orientation)
+                        bboxes[frameId][0].append(bbox)
+                        bboxes[frameId][1].append(1)
+
+                if viewId is not None and str(viewId) in negBboxDictFromShape:
+                    if frameId not in bboxes:
+                        bboxes[frameId] = ([],[])
+                    for bbox in negBboxDictFromShape[viewId]:
+                        bbox = self.normalize_bbox(bbox, img.shape[1], img.shape[0], PAR, orientation)
+                        bboxes[frameId][0].append(bbox)
+                        bboxes[frameId][1].append(0)
+
+            chunk.logger.debug(f"clicks = {clicks}")
+            chunk.logger.debug(f"bboxes = {bboxes}")
 
             response = video_predictor.handle_request(
                 request=dict(
@@ -337,13 +427,24 @@ In order to associate a point to a given sub mask, it must be colored with the c
             )
             session_id = response["session_id"]
 
-            if chunk.node.prompt.value != "":
+            #if chunk.node.prompt.value != "":
+            response = video_predictor.handle_request(
+                request=dict(
+                    type="add_prompt",
+                    session_id=session_id,
+                    frame_index=0,
+                    text=chunk.node.prompt.value,
+                )
+            )
+
+            for f, bbox in bboxes.items():
                 response = video_predictor.handle_request(
                     request=dict(
                         type="add_prompt",
                         session_id=session_id,
-                        frame_index=0,
-                        text=chunk.node.prompt.value,
+                        frame_index=f,
+                        bounding_boxes=bbox[0],
+                        bounding_box_labels=bbox[1],
                     )
                 )
 
@@ -373,7 +474,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
                 colorMaskImage = np.zeros_like(img)
                 for key, mask in masks.items():
                     maskImage[mask] = [255, 255, 255]
-                    colorMaskImage[mask] = colors[int(key) % len(colors)]
+                    colorMaskImage[mask] = [x/255.0 for x in colors[int(key) % len(colors)]]
 
                 if chunk.node.maskInvert.value:
                     mask = (maskImage[:,:,0:1] == 0).astype('float32')
