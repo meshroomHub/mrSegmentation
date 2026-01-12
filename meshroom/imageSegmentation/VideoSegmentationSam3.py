@@ -8,34 +8,17 @@ from meshroom.core.utils import VERBOSE_LEVEL
 
 class Sam3VideoNodeSize(desc.MultiDynamicNodeSize):
     def computeSize(self, node):
-        # if node.attribute(self._params[0]).isLink:
-        #     return node.attribute(self._params[0]).inputLink.node.size
-
-        # from pathlib import Path
-
-        # input_path_param = node.attribute(self._params[0])
-        # extension_param = node.attribute(self._params[1])
-        # input_path = input_path_param.value
-        # extension = extension_param.value
-        # include_suffixes = [extension.lower(), extension.upper()]
-
         size = 1
-        # if Path(input_path).is_dir():
-        #     import itertools
-        #     image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-        #     size = len(image_paths)
-        
         return size
         
 class VideoSegmentationSam3(desc.Node):
     size = Sam3VideoNodeSize(['input', 'extensionIn'])
     gpu = desc.Level.INTENSIVE
-    #parallelization = desc.Parallelization(blockSize=50)
 
     category = "Utils"
     documentation = """
-Based on the Segment Anything model 3, the node generates a binary mask from a text prompt.
-It is strongly advised to launch a first segmentation using only a text prompt.
+Based on the Segment Anything model 3, the node generates a binary mask from a text prompt, a single bounding box or
+a set of positive and negative clicks (Clicks In/Out).
 Two masks are generated, a binary one and a colored one that the indexes of every sub masks.
 Object Ids are color encoded as follow:
  0:[1,0,0] = xff0000
@@ -160,29 +143,12 @@ In order to associate a point to a given sub mask, it must be colored with the c
                 keyType="viewId",
             ),
         ),
-        desc.ShapeList(
-            name="positiveBoxes",
-            label="Positive Boxes",
-            description="Prompt: Positive Bounding Boxes",
-            shape=desc.Rectangle(
-                name="bbox",
-                label="Bounding Box",
-                description="Rectangle.",
-                keyable=True,
-                keyType="viewId",
-            ),
-        ),
-        desc.ShapeList(
-            name="negativeBoxes",
-            label="Negative Boxes",
-            description="Prompt: Negative Bounding Boxes",
-            shape=desc.Rectangle(
-                name="bbox",
-                label="Bounding Box",
-                description="Rectangle.",
-                keyable=True,
-                keyType="viewId",
-            ),
+        desc.Rectangle(
+            name="boxPrompt",
+            label="Box Prompt",
+            description="Single bounding box used as initial prompt.",
+            keyable=True,
+            keyType="viewId"
         ),
     ]
 
@@ -259,19 +225,18 @@ In order to associate a point to a given sub mask, it must be colored with the c
 
     def getBboxDictWithViewIdAsKeyFromShape(self, shape):
         bboxDictFromShape = {}
-        shapesBBoxesIn = shape.getShapesAsDict()
-        if shapesBBoxesIn:
-            for sh in shapesBBoxesIn:
-                for key in sh["observations"]:
-                    xc = sh["observations"][key]["center"]["x"]
-                    yc = sh["observations"][key]["center"]["y"]
-                    w = sh["observations"][key]["size"]["width"]
-                    h = sh["observations"][key]["size"]["height"]
-                    bb = [xc - w/2, yc - h/2, w, h]
-                    if key in bboxDictFromShape:
-                        bboxDictFromShape[key].append(bb)
-                    else:
-                        bboxDictFromShape[key] = [bb]
+        sh = shape.getShapeAsDict()
+        if sh:
+            for key in sh["observations"]:
+                xc = sh["observations"][key]["center"]["x"]
+                yc = sh["observations"][key]["center"]["y"]
+                w = sh["observations"][key]["size"]["width"]
+                h = sh["observations"][key]["size"]["height"]
+                bb = [xc - w/2, yc - h/2, w, h]
+                if key in bboxDictFromShape:
+                    bboxDictFromShape[key].append(bb)
+                else:
+                    bboxDictFromShape[key] = [bb]
         return bboxDictFromShape
 
     def normalize_bbox(self, bbox_xywh, img_w, img_h, PAR, orientation):
@@ -345,8 +310,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
 
             posClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.positiveClicks)
             negClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.negativeClicks)
-            posBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.positiveBoxes)
-            negBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.negativeBoxes)
+            posBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.boxPrompt)
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
@@ -408,14 +372,6 @@ In order to associate a point to a given sub mask, it must be colored with the c
                         bboxes[frameId][0].append(bbox)
                         bboxes[frameId][1].append(1)
 
-                if viewId is not None and str(viewId) in negBboxDictFromShape:
-                    if frameId not in bboxes:
-                        bboxes[frameId] = ([],[])
-                    for bbox in negBboxDictFromShape[viewId]:
-                        bbox = self.normalize_bbox(bbox, img.shape[1], img.shape[0], PAR, orientation)
-                        bboxes[frameId][0].append(bbox)
-                        bboxes[frameId][1].append(0)
-
             chunk.logger.debug(f"clicks = {clicks}")
             chunk.logger.debug(f"bboxes = {bboxes}")
 
@@ -427,7 +383,6 @@ In order to associate a point to a given sub mask, it must be colored with the c
             )
             session_id = response["session_id"]
 
-            #if chunk.node.prompt.value != "":
             response = video_predictor.handle_request(
                 request=dict(
                     type="add_prompt",
