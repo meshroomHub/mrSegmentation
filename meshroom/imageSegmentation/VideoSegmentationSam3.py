@@ -17,8 +17,8 @@ class VideoSegmentationSam3(desc.Node):
 
     category = "Utils"
     documentation = """
-Based on the Segment Anything model 3, the node generates a binary mask from a text prompt, a single bounding box or
-a set of positive and negative clicks (Clicks In/Out).
+Based on the Segment Anything video predictor model 3, the node generates a binary mask from a text prompt,
+a single bounding box or a set of positive and negative clicks (Clicks In/Out).
 Two masks are generated, a binary one and a colored one that the indexes of every sub masks.
 Object Ids are color encoded as follow:
  0:[1,0,0] = xff0000
