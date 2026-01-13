@@ -19,29 +19,29 @@ class VideoSegmentationSam3(desc.Node):
     documentation = """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask from a text prompt,
 a single bounding box or a set of positive and negative clicks (Clicks In/Out).
-Two masks are generated, a binary one and a colored one that the indexes of every sub masks.
+Two masks are generated, a binary one and a colored one that the indexes of every submasks.
 Object Ids are color encoded as follow:
- 0:[1,0,0] = xff0000
- 1:[0,1,0] = x00ff00
- 2:[0,0,1] = x0000ff
- 3:[1,1,0] = xffff00
- 4:[1,0,1] = xff00ff
- 5:[0,1,1] = x00ffff
- 6:[1,0,0.5] = xff0080
- 7:[0,1,0.5] = x00ff80
- 8:[0,0.5,1] = x0080ff
- 9:[1,1,0.5] = xffff80
-10:[1,0.5,1] = xff80ff
-11:[0.5,1,1] = x80ffff
-12:[1,0.5,0] = xff8000
-13:[0.5,1,0] = x80ff00
-14:[0.5,0,1] = x8000ff
-15:[1,0.5,0.5] = xff8080
-16:[0.5,1,0.5] = x80ff80
-17:[0.5,0.5,1] = x8080ff
-18:[1,1,1] = xffffff
+ 0:[1,0,0] = 0xff0000
+ 1:[0,1,0] = 0x00ff00
+ 2:[0,0,1] = 0x0000ff
+ 3:[1,1,0] = 0xffff00
+ 4:[1,0,1] = 0xff00ff
+ 5:[0,1,1] = 0x00ffff
+ 6:[1,0,0.5] = 0xff0080
+ 7:[0,1,0.5] = 0x00ff80
+ 8:[0,0.5,1] = 0x0080ff
+ 9:[1,1,0.5] = 0xffff80
+10:[1,0.5,1] = 0xff80ff
+11:[0.5,1,1] = 0x80ffff
+12:[1,0.5,0] = 0xff8000
+13:[0.5,1,0] = 0x80ff00
+14:[0.5,0,1] = 0x8000ff
+15:[1,0.5,0.5] = 0xff8080
+16:[0.5,1,0.5] = 0x80ff80
+17:[0.5,0.5,1] = 0x8080ff
+18:[1,1,1] = 0xffffff
 After that, refinement is possible through in/out points for every segmented objects.
-In order to associate a point to a given sub mask, it must be colored with the corresponding color.
+In order to associate a point to a given submask, it must be colored with the corresponding color.
 """
 
     inputs = [
@@ -199,11 +199,11 @@ In order to associate a point to a given sub mask, it must be colored with the c
             outputs_per_frame[response["frame_index"]] = response["outputs"]
         return outputs_per_frame
         
-    def getClickDictWithViewIdAsKeyFromShape(self, shape):
+    def getClickDictWithViewIdAsKeyFromShape(self, shapeList):
         clickDictFromShape = {}
-        shapesClicksIn = shape.getShapesAsDict()
-        if shapesClicksIn:
-            for sh in shapesClicksIn:
+        shapes = shapeList.getShapesAsDict()
+        if shapes:
+            for sh in shapes:
                 color = sh["properties"]["color"]
                 for key in sh["observations"]:
                     x = sh["observations"][key]["x"]
@@ -246,7 +246,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
         if isinstance(bbox_xywh, list):
             assert (
                 len(bbox_xywh) == 4
-            ), "bbox_xywh list must have 4 elements. Batching not support except for torch tensors."
+            ), "bbox_xywh list must have 4 elements. Batching not supported except for torch tensors."
             normalized_bbox = bbox_xywh.copy()
             normalized_bbox[0], normalized_bbox[1] = image.fromRawToUsualOrientation(normalized_bbox[0], normalized_bbox[1], img_w, img_h, PAR, orientation)
             normalized_bbox[2], normalized_bbox[3] = image.fromRawToUsualOrientation(normalized_bbox[2], normalized_bbox[3], img_w, img_h, PAR, orientation)
@@ -333,7 +333,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
                 frameId = chunk_image_paths[idx][2]
 
                 objects = {}
-                if viewId is not None and str(viewId) in posClickDictFromShape:
+                if viewId is not None and viewId in posClickDictFromShape:
                     for pt in posClickDictFromShape[viewId]:
                         color = [int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16)]
                         if color not in colors:
@@ -347,7 +347,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
                         objects[objId][0].append(p)
                         objects[objId][1].append(1)
 
-                if viewId is not None and str(viewId) in negClickDictFromShape:
+                if viewId is not None and viewId in negClickDictFromShape:
                     for pt in negClickDictFromShape[viewId]:
                         color = [int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16)]
                         if color not in colors:
@@ -383,7 +383,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
             )
             session_id = response["session_id"]
 
-            response = video_predictor.handle_request(
+            video_predictor.handle_request(
                 request=dict(
                     type="add_prompt",
                     session_id=session_id,
@@ -393,7 +393,7 @@ In order to associate a point to a given sub mask, it must be colored with the c
             )
 
             for f, bbox in bboxes.items():
-                response = video_predictor.handle_request(
+                video_predictor.handle_request(
                     request=dict(
                         type="add_prompt",
                         session_id=session_id,
@@ -403,18 +403,18 @@ In order to associate a point to a given sub mask, it must be colored with the c
                     )
                 )
 
-            outputs_per_frame = self.propagate_in_video(video_predictor, session_id)
+            self.propagate_in_video(video_predictor, session_id)
 
             for f, objects in clicks.items():
                 for obj_id, obj in objects.items():
-                    response = video_predictor.handle_request(
+                    video_predictor.handle_request(
                         request=dict(
                             type="add_prompt",
                             session_id=session_id,
                             frame_index=f,
                             points=torch.tensor(np.array(obj[0])),
                             point_labels=torch.tensor(np.array(obj[1])),
-                            obj_id = obj_id
+                            obj_id=obj_id
                         )
                     )
 
