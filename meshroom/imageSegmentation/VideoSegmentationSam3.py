@@ -167,7 +167,7 @@ In order to associate a point to a given submask, it must be colored with the su
         desc.File(
             name="cryptomatte",
             label="Cryptomatte",
-            description="Cryptomatte embeded in exr images.",
+            description="Cryptomatte embedded in exr images.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
             enabled=lambda node: node.outputCryptomatte.value,
@@ -272,7 +272,7 @@ In order to associate a point to a given submask, it must be colored with the su
         import mmh3
         import numpy as np
         hash_32 = mmh3.hash(name, seed=0) & 0xFFFFFFFF
-        f32_val = np.frombuffer(struct.pack('<I',hash_32), dtype=np.float32)[0]
+        f32_val = np.frombuffer(struct.pack('<I', hash_32), dtype=np.float32)[0]
         f32_hex = hex(struct.unpack('<I', struct.pack('<f', f32_val))[0])[2:]
         return f32_val, f32_hex, hash_32
 
@@ -439,10 +439,11 @@ In order to associate a point to a given submask, it must be colored with the su
                     manifest = {}
 
                 colorPalette.generate_palette(max(masks.keys()) + 1)
-                cryptoName = "object" if chunk.node.prompt.value=="" else chunk.node.prompt.value
+                cryptoName = "object" if chunk.node.prompt.value == "" else chunk.node.prompt.value
                 for key, mask in masks.items():
                     maskImage[mask] = [255, 255, 255]
-                    colorMaskImage[mask] = [x/255.0 for x in colorPalette.at(int(key))]
+                    color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
+                    colorMaskImage[mask] = [x/255.0 for x in color]
                     if chunk.node.outputCryptomatte.value:
                         obj_name = f"{cryptoName}_{int(key)}"
                         f32_hash, hex_val, _ = self.hash_name(obj_name)
@@ -455,11 +456,11 @@ In order to associate a point to a given submask, it must be colored with the su
                     spec.channelnames = (cryptoName+".red", cryptoName+".green", cryptoName+".blue",
                                         cryptoName+"00.red", cryptoName+"00.green", cryptoName+"00.blue", cryptoName+"00.alpha")
                     _, _, h32 = self.hash_name(cryptoName)
-                    key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
-                    spec.attribute(f"cryptomatte/{key}/name", cryptoName)
-                    spec.attribute(f"cryptomatte/{key}/manifest", json.dumps(manifest))
-                    spec.attribute(f"cryptomatte/{key}/hash", "MurmurHash3_32")
-                    spec.attribute(f"cryptomatte/{key}/conversion", "uint32_to_float32")
+                    crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
+                    spec.attribute(f"cryptomatte/{crypto_key}/name", cryptoName)
+                    spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest))
+                    spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
+                    spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
 
                     if chunk.node.keepFilename.value:
                         cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")

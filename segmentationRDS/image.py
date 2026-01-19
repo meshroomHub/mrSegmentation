@@ -247,7 +247,7 @@ class paletteGenerator:
             self.colors.append(color)
             return color
         
-        random.seed = self.seed + len(self.colors)
+        random.seed(self.seed + len(self.colors))
         best_color = None
         max_dist_min = -1
 
@@ -259,6 +259,9 @@ class paletteGenerator:
             if dist_min > max_dist_min:
                 max_dist_min = dist_min
                 best_color = color
+        
+        if best_color is None:  # Edge case: after 2000 iterations only grey-ish colors have been generated
+            best_color = color
 
         self.colors.append(best_color)
         return best_color
@@ -282,6 +285,5 @@ class paletteGenerator:
 
     def at(self, idx):
         if idx >=0 and idx < len(self.colors):
-            c = [x for x in self.colors[idx]]
-            return c
+            return list(self.colors[idx])
         return None
