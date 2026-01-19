@@ -2,9 +2,13 @@ __version__ = "0.3"
 
 import os
 from pathlib import Path
+import struct
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
+
+import logging
+logger = logging.getLogger("VideoSegmentationSam3")
 
 class Sam3VideoNodeSize(desc.MultiDynamicNodeSize):
     def computeSize(self, node):
@@ -17,31 +21,10 @@ class VideoSegmentationSam3(desc.Node):
 
     category = "Utils"
     documentation = """
-Based on the Segment Anything video predictor model 3, the node generates a binary mask from a text prompt,
-a single bounding box or a set of positive and negative clicks (Clicks In/Out).
-Two masks are generated, a binary one and a colored one that the indexes of every submasks.
-Object Ids are color encoded as follow:
- 0:[1,0,0] = 0xff0000
- 1:[0,1,0] = 0x00ff00
- 2:[0,0,1] = 0x0000ff
- 3:[1,1,0] = 0xffff00
- 4:[1,0,1] = 0xff00ff
- 5:[0,1,1] = 0x00ffff
- 6:[1,0,0.5] = 0xff0080
- 7:[0,1,0.5] = 0x00ff80
- 8:[0,0.5,1] = 0x0080ff
- 9:[1,1,0.5] = 0xffff80
-10:[1,0.5,1] = 0xff80ff
-11:[0.5,1,1] = 0x80ffff
-12:[1,0.5,0] = 0xff8000
-13:[0.5,1,0] = 0x80ff00
-14:[0.5,0,1] = 0x8000ff
-15:[1,0.5,0.5] = 0xff8080
-16:[0.5,1,0.5] = 0x80ff80
-17:[0.5,0.5,1] = 0x8080ff
-18:[1,1,1] = 0xffffff
-After that, refinement is possible through in/out points for every segmented objects.
-In order to associate a point to a given submask, it must be colored with the corresponding color.
+Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
+from a text prompt, a single bounding box or a set of positive and negative clicks (Clicks In/Out).
+Text prompt and Clicks can be combined to refine results. For refinement, points must be associated to an existing submask.
+In order to associate a point to a given submask, it must be colored with the submask's color.
 """
 
     inputs = [
@@ -85,6 +68,12 @@ In order to associate a point to a given submask, it must be colored with the co
             name="maskInvert",
             label="Invert Masks",
             description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
+            value=False,
+        ),
+        desc.BoolParam(
+            name="outputCryptomatte",
+            label="Output Cryptomatte",
+            description="Generate exr images containing cryptomatte to encode the segmentation results.",
             value=False,
         ),
         desc.BoolParam(
@@ -173,6 +162,15 @@ In order to associate a point to a given submask, it must be colored with the co
             description="Generated segmentation masks with color corresponding to item indexes.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/colorMask_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".png",
+            group="",
+        ),
+        desc.File(
+            name="cryptomatte",
+            label="Cryptomatte",
+            description="Cryptomatte embeded in exr images.",
+            semantic="image",
+            value=lambda attr: "{nodeCacheFolder}/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
+            enabled=lambda node: node.outputCryptomatte.value,
             group="",
         ),
     ]
@@ -270,6 +268,14 @@ In order to associate a point to a given submask, it must be colored with the co
             normalized_bbox[..., 3] /= img_h
         return normalized_bbox
 
+    def hash_name(self, name):
+        import mmh3
+        import numpy as np
+        hash_32 = mmh3.hash(name, seed=0) & 0xFFFFFFFF
+        f32_val = np.frombuffer(struct.pack('<I',hash_32), dtype=np.float32)[0]
+        f32_hex = hex(struct.unpack('<I', struct.pack('<f', f32_val))[0])[2:]
+        return f32_val, f32_hex, hash_32
+
 
     def preprocess(self, node):
         extension = node.extensionIn.value
@@ -288,17 +294,18 @@ In order to associate a point to a given submask, it must be colored with the co
         import torch
         from pyalicevision import image as avimg
         from PIL import Image
+        import OpenImageIO as oiio
 
         try:
-            chunk.logManager.start(chunk.node.verboseLevel.value)
+            logger.setLevel(chunk.node.verboseLevel.value.upper())
 
             if not chunk.node.input:
-                chunk.logger.warning("Nothing to segment")
+                logger.warning("Nothing to segment")
                 return
             if not chunk.node.output.value:
                 return
 
-            chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
+            logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
             chunk_image_paths = self.image_paths
 
@@ -320,9 +327,7 @@ In order to associate a point to a given submask, it must be colored with the co
             clicks = {}
             bboxes = {}
 
-            colors=[[255,0,0],[0,255,0],[0,0,255],[255,255,0],[255,0,255],[0,255,255],
-                    [255,0,128],[0,255,128],[0,128,255],[255,255,128],[255,128,255],[128,255,255],
-                    [255,128,0],[128,255,0],[128,0,255],[255,128,128],[128,255,128],[128,128,255],[255,255,255]]
+            colorPalette = image.paletteGenerator()
             
             for idx, path in enumerate(chunk_image_paths):
                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
@@ -335,10 +340,10 @@ In order to associate a point to a given submask, it must be colored with the co
                 objects = {}
                 if viewId is not None and viewId in posClickDictFromShape:
                     for pt in posClickDictFromShape[viewId]:
-                        color = [int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16)]
-                        if color not in colors:
-                            colors.append(color)
-                        objId = colors.index(color)
+                        color = (int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16))
+                        if colorPalette.index(color) is None:
+                            colorPalette.add_color(color)
+                        objId = colorPalette.index(color)
 
                         if objId not in objects:
                             objects[objId] = [[], []]
@@ -349,10 +354,10 @@ In order to associate a point to a given submask, it must be colored with the co
 
                 if viewId is not None and viewId in negClickDictFromShape:
                     for pt in negClickDictFromShape[viewId]:
-                        color = [int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16)]
-                        if color not in colors:
-                            colors.append(color)
-                        objId = colors.index(color)
+                        color = (int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16))
+                        if colorPalette.index(color) is None:
+                            colorPalette.add_color(color)
+                        objId = colorPalette.index(color)
 
                         if objId not in objects:
                             objects[objId] = [[], []]
@@ -372,8 +377,8 @@ In order to associate a point to a given submask, it must be colored with the co
                         bboxes[frameId][0].append(bbox)
                         bboxes[frameId][1].append(1)
 
-            chunk.logger.debug(f"clicks = {clicks}")
-            chunk.logger.debug(f"bboxes = {bboxes}")
+            logger.debug(f"clicks = {clicks}")
+            logger.debug(f"bboxes = {bboxes}")
 
             response = video_predictor.handle_request(
                 request=dict(
@@ -427,15 +432,51 @@ In order to associate a point to a given submask, it must be colored with the co
             for frameId, masks in outputs_per_frame.items():
                 maskImage = np.zeros_like(img)
                 colorMaskImage = np.zeros_like(img)
+                if chunk.node.outputCryptomatte.value:
+                    crypto_id = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
+                    crypto_cov = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
+                    crypto_zeros = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
+                    manifest = {}
+
+                colorPalette.generate_palette(max(masks.keys()) + 1)
+                cryptoName = "object" if chunk.node.prompt.value=="" else chunk.node.prompt.value
                 for key, mask in masks.items():
                     maskImage[mask] = [255, 255, 255]
-                    colorMaskImage[mask] = [x/255.0 for x in colors[int(key) % len(colors)]]
+                    colorMaskImage[mask] = [x/255.0 for x in colorPalette.at(int(key))]
+                    if chunk.node.outputCryptomatte.value:
+                        obj_name = f"{cryptoName}_{int(key)}"
+                        f32_hash, hex_val, _ = self.hash_name(obj_name)
+                        manifest[obj_name] = hex_val
+                        crypto_id[mask] = f32_hash
+                        crypto_cov[mask] = 1.0
+
+                if chunk.node.outputCryptomatte.value:
+                    spec = oiio.ImageSpec(img.shape[1], img.shape[0], 7, oiio.FLOAT)
+                    spec.channelnames = (cryptoName+".red", cryptoName+".green", cryptoName+".blue",
+                                        cryptoName+"00.red", cryptoName+"00.green", cryptoName+"00.blue", cryptoName+"00.alpha")
+                    _, _, h32 = self.hash_name(cryptoName)
+                    key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
+                    spec.attribute(f"cryptomatte/{key}/name", cryptoName)
+                    spec.attribute(f"cryptomatte/{key}/manifest", json.dumps(manifest))
+                    spec.attribute(f"cryptomatte/{key}/hash", "MurmurHash3_32")
+                    spec.attribute(f"cryptomatte/{key}/conversion", "uint32_to_float32")
+
+                    if chunk.node.keepFilename.value:
+                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
+                    else:
+                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + str(chunk_image_paths[frameId][1]) + ".exr")
+
+                    cryptomatteImg = oiio.ImageOutput.create(str(cryptomattePath))
+                    cryptomatteImg.open(cryptomattePath, spec)
+                    cryptomatte_data = np.dstack((crypto_zeros, crypto_zeros, crypto_zeros, crypto_id, crypto_cov, crypto_zeros, crypto_zeros))
+                    cryptomatteImg.write_image(cryptomatte_data)
+                    cryptomatteImg.close()
 
                 if chunk.node.maskInvert.value:
                     mask = (maskImage[:,:,0:1] == 0).astype('float32')
                 else:
                     mask = (maskImage[:,:,0:1] > 0).astype('float32')
-                chunk.logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
+                logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
 
                 if chunk.node.keepFilename.value:
                     outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
@@ -455,7 +496,6 @@ In order to associate a point to a given submask, it must be colored with the co
 
         finally:
             torch.cuda.empty_cache()
-            chunk.logManager.end()
 
 
 def get_image_paths_list(input_path, extension):
