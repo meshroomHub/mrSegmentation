@@ -1,4 +1,4 @@
-__version__ = "0.3"
+__version__ = "0.1"
 
 import os
 from pathlib import Path
@@ -51,12 +51,6 @@ In order to associate a point to a given submask, it must be colored with the su
             description="What to segment, separated by point or one item per line.",
             value="person",
             semantic="multiline",
-        ),
-        desc.File(
-            name="bboxFolder",
-            label="BBoxes Folder",
-            description="JSON file containing prompting bounding boxes.",
-            value="",
         ),
         desc.File(
             name="segmentationModelPath",
