@@ -8,7 +8,7 @@ from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 
 import logging
-logger = logging.getLogger("VideoSegmentationSam3")
+logger = logging.getLogger("SDMatte")
 
 class SDMatteNodeSize(desc.MultiDynamicNodeSize):
     def computeSize(self, node):
@@ -187,8 +187,7 @@ Only one type of driving prompt must be provided for a given image.
                 if pathMask != "":
                     inputFileMask = os.path.join(pathMask, Path(inputFile).stem + "." + extMask)
                 outputFileMatte = os.path.join(outDir, Path(inputFile).stem + "." + extOut)
-                outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
-                paths[str(inputFile)] = (outputFileMatte, outputFileBoxes, frameId, 'not_a_view', inputFileMask)
+                paths[str(inputFile)] = (outputFileMatte, frameId, 'not_a_view', inputFileMask)
         elif Path(pathIn).suffix.lower() in [".sfm", ".abc"]:
             if Path(pathIn).exists():
                 dataAV = sfmData.SfMData()
@@ -201,13 +200,11 @@ Only one type of driving prompt must be provided for a given image.
                             if pathMask != "":
                                 inputFileMask = os.path.join(pathMask, Path(inputFile).stem + "." + extMask)
                             outputFileMatte = os.path.join(outDir, Path(inputFile).stem + "." + extOut)
-                            outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
                         else:
                             if pathMask != "":
                                 inputFileMask = os.path.join(pathMask, str(id) + "." + extMask)
                             outputFileMatte = os.path.join(outDir, str(id) + "." + extOut)
-                            outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".jpg")
-                        paths[inputFile] = (outputFileMatte, outputFileBoxes, frameId, str(id), inputFileMask)
+                        paths[inputFile] = (outputFileMatte, frameId, str(id), inputFileMask)
 
         return paths
 
@@ -311,36 +308,6 @@ Only one type of driving prompt must be provided for a given image.
             bboxes_xyxy.append([int(x1_norm * img_w), int(y1_norm * img_h), int(x2_norm * img_w), int(y2_norm * img_h)])
         return bboxes_xyxy, bboxes_xyxy_norm
 
-    def updateDetectedBboxes(self, detectedBBoxes, xyxy, idx, key, color):
-        if idx+1 > len(detectedBBoxes):
-            shape_bbox = {
-                "name": "BBox_" + str(idx),
-                "type": "Rectangle",
-                "properties": {
-                    "color": color},
-                "observations" : {}}
-            detectedBBoxes.append(shape_bbox)
-        detectedBBoxes[idx]["observations"][key] = {
-            "center" : {
-                "x": (xyxy[0] + xyxy[2]) / 2,
-                "y": (xyxy[1] + xyxy[3]) / 2
-                },
-            "size" : {
-                "width": xyxy[2] - xyxy[0],
-                "height": xyxy[3] - xyxy[1]
-                }}
-
-    def updateMaskImageAndDetectedBboxes(self, inference_state, maskImage, detectedBBoxes, key, w_ori, h_ori, PAR, orientation):
-        from segmentationRDS import image
-        masks, boxes, scores = inference_state["masks"], inference_state["boxes"], inference_state["scores"]
-        for mask in masks:
-            maskImage[mask.squeeze(0).cpu()] = [255, 255, 255]
-        for idx, box in enumerate(boxes):
-            x1, y1, x2, y2 = box.cpu().tolist()
-            x1, y1 = image.fromUsualToRawOrientation(x1, y1, w_ori, h_ori, PAR, orientation)
-            x2, y2 = image.fromUsualToRawOrientation(x2, y2, w_ori, h_ori, PAR, orientation)
-            self.updateDetectedBboxes(detectedBBoxes, [x1, y1, x2, y2], idx, key, "red")
-
     def build_SDMatte_model(self, modelFolder, checkpoint, device, promptType):
 
         if device not in ["cuda", "cpu"] or promptType not in ["bbox_mask", "point_mask", "mask", "trimap"]:
@@ -349,8 +316,9 @@ Only one type of driving prompt must be provided for a given image.
         import torch
         from modeling import SDMatte
         from detectron2.checkpoint import DetectionCheckpointer
+        from packaging import version
 
-        if int(torch.__version__[0]) > 2 or (int(torch.__version__[0]) == 2 and int(torch.__version__[2]) > 5):
+        if version.parse(torch.__version__) > version.Version("2.5"):
             import omegaconf
             import typing
             import collections
@@ -389,8 +357,6 @@ Only one type of driving prompt must be provided for a given image.
         return model
 
     def processChunk(self, chunk):
-        import json
-        import re
         from segmentationRDS import image
 
         from torchvision.transforms import functional as F
@@ -431,7 +397,7 @@ Only one type of driving prompt must be provided for a given image.
                 posBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.positiveBoxes)
                 bboxOK = True
                 for k, (iFile, oFile) in enumerate(outFiles.items()):
-                    viewId = oFile[3]
+                    viewId = oFile[2]
                     if viewId not in posBboxDictFromShape:
                         bboxOK = False
                         break
@@ -439,7 +405,7 @@ Only one type of driving prompt must be provided for a given image.
                     posClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.positiveClicks)
                     clicksOK = True
                     for k, (iFile, oFile) in enumerate(outFiles.items()):
-                        viewId = oFile[3]
+                        viewId = oFile[2]
                         if viewId not in posClickDictFromShape:
                             clicksOK = False
                             break
@@ -480,8 +446,8 @@ Only one type of driving prompt must be provided for a given image.
                     if k >= chunk.range.start and k <= chunk.range.last:
 
                         img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
-                        frameId = oFile[2]
-                        viewId = oFile[3]
+                        frameId = oFile[1]
+                        viewId = oFile[2]
 
                         logger.info("frameId: {} - {}".format(frameId, iFile))
 
@@ -495,7 +461,7 @@ Only one type of driving prompt must be provided for a given image.
                         sample["caption"] = chunk.node.caption.value
 
                         if promptType in ["mask", "trimap"]:
-                            maskRGB, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(oFile[4], True)
+                            maskRGB, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(oFile[3], True)
                             mask = maskRGB[:,:,0]
                             mask_sized = cv2.resize(mask, inference_size, interpolation=cv2.INTER_NEAREST)
                             mask_scaled = mask_sized.copy() * 2 - 1
