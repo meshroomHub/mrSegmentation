@@ -347,7 +347,7 @@ Only one type of driving prompt must be provided for a given image.
             return None
 
         import torch
-        from SDMatte import SDMatte
+        from modeling import SDMatte
         from detectron2.checkpoint import DetectionCheckpointer
 
         if int(torch.__version__[0]) > 2 or (int(torch.__version__[0]) == 2 and int(torch.__version__[2]) > 5):
@@ -453,32 +453,32 @@ Only one type of driving prompt must be provided for a given image.
                 logger.warning("No graphical prompt provided, caption will be combined with a full mask.")
 
             if promptType == "":
-                logger.error("Some images have no valid prompt to drive the matting process !!!")
+                raise ValueError("Some images have no valid prompt to drive the matting process !!!")
             else:
 
                 if not os.path.exists(chunk.node.output.value):
                     os.mkdir(chunk.node.output.value)
 
-                device = "cuda" if torch.cuda.is_available() else "cpu"
+                device = "cuda" if torch.cuda.is_available() and chunk.node.useGpu.value else "cpu"
 
                 modelFolder = os.getenv("SDMATTE_MODELS_PATH")
+                if modelFolder is None:
+                    raise ValueError("SDMATTE_MODELS_PATH env var is not defined.")
+
                 modelCheckpoint = os.getenv("SDMATTE_MODELS_PATH") + "/SDMatte.pth"
 
                 model = self.build_SDMatte_model(modelFolder, modelCheckpoint, device, promptType if promptType != "auto_mask" else "mask")
 
                 if model is None:
-                    logger.error("SDMatte model cannot be loaded")
+                    raise ValueError("SDMatte model cannot be loaded")
 
                 metadata_deep_model = {}
                 metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SDMatte"
                 metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "0.1"
 
-                logger.info("Loop start")
-
                 for k, (iFile, oFile) in enumerate(outFiles.items()):
                     if k >= chunk.range.start and k <= chunk.range.last:
 
-                        logger.info("iFile: {}".format(iFile))
                         img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
                         frameId = oFile[2]
                         viewId = oFile[3]
@@ -529,14 +529,14 @@ Only one type of driving prompt must be provided for a given image.
                             logger.debug(f"clicks_xy_norm = {clicks_xy_norm}")
                             point_mask = np.zeros_like(img)[:,:,0]
                             point_coords = []
-                            for k, click_xy in enumerate(clicks_xy):
+                            for idx, click_xy in enumerate(clicks_xy):
                                 tmp_mask = np.zeros_like(img)[:,:,0]
                                 tmp_mask[click_xy[1], click_xy[0]] = 1
                                 tmp_mask = scipy.ndimage.gaussian_filter(tmp_mask, sigma=20)
                                 tmp_mask /= np.max(tmp_mask)
                                 point_mask = np.maximum(point_mask, tmp_mask)
-                                point_coords.append(clicks_xy_norm[k][0])
-                                point_coords.append(clicks_xy_norm[k][1])
+                                point_coords.append(clicks_xy_norm[idx][0])
+                                point_coords.append(clicks_xy_norm[idx][1])
                             point_mask_sized = cv2.resize(point_mask, inference_size, interpolation=cv2.INTER_NEAREST)
                             point_mask_scaled = point_mask_sized.copy() * 2 - 1
                             sample["point_mask"] = F.to_tensor(point_mask_scaled).float().unsqueeze(0)
