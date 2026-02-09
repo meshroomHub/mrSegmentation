@@ -432,7 +432,8 @@ In order to associate a point to a given submask, it must be colored with the su
                     crypto_zeros = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                     manifest = {}
 
-                colorPalette.generate_palette(max(masks.keys()) + 1)
+                if len(masks.keys()) > 0:
+                    colorPalette.generate_palette(max(masks.keys()) + 1)
                 cryptoName = "object" if chunk.node.prompt.value == "" else chunk.node.prompt.value
                 for key, mask in masks.items():
                     maskImage[mask] = [255, 255, 255]
