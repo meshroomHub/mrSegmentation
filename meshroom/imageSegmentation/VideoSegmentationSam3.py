@@ -12,12 +12,28 @@ logger = logging.getLogger("VideoSegmentationSam3")
 
 class Sam3VideoNodeSize(desc.MultiDynamicNodeSize):
     def computeSize(self, node):
+        if node.attribute(self._params[0]).isLink:
+            return node.attribute(self._params[0]).inputLink.node.size
+
+        from pathlib import Path
+
+        input_path_param = node.attribute(self._params[0])
+        extension_param = node.attribute(self._params[1])
+        input_path = input_path_param.value
+        extension = extension_param.value
+        include_suffixes = [extension.lower(), extension.upper()]
+
         size = 1
+        if Path(input_path).is_dir():
+            import itertools
+            image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
+            size = len(image_paths)
+        
         return size
         
 class VideoSegmentationSam3(desc.Node):
     size = Sam3VideoNodeSize(['input', 'extensionIn'])
-    gpu = desc.Level.INTENSIVE
+    gpu = desc.Level.EXTREME
 
     category = "Utils"
     documentation = """
@@ -322,6 +338,7 @@ In order to associate a point to a given submask, it must be colored with the su
             bboxes = {}
 
             colorPalette = image.paletteGenerator()
+            firstFrameId = chunk_image_paths[0][2]
             
             for idx, path in enumerate(chunk_image_paths):
                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
@@ -329,7 +346,7 @@ In order to associate a point to a given submask, it must be colored with the su
                 sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
 
                 viewId = chunk_image_paths[idx][1]
-                frameId = chunk_image_paths[idx][2]
+                frameId = chunk_image_paths[idx][2] - firstFrameId
 
                 objects = {}
                 if viewId is not None and viewId in posClickDictFromShape:
