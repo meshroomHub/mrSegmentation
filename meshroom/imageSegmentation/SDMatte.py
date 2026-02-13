@@ -340,15 +340,18 @@ Only one type of driving prompt must be provided for a given image.
             conv_scale=3,
             num_inference_steps=1,
             aux_input=promptType,
+            aux_input_list=["point_mask", "bbox_mask", "mask", "trimap"],
+            attn_mask_aux_input=["point_mask", "bbox_mask", "mask", "trimap"],
             add_noise=False,
             use_dis_loss=True,
             use_aux_input=True,
             use_coor_input=True,
             use_attention_mask=True,
+            use_encoder_attention_mask=True,
             residual_connection=False,
             use_encoder_hidden_states=True,
             use_attention_mask_list=[True, True, True],
-            use_encoder_hidden_states_list=[False, True, False],
+            use_encoder_hidden_states_list=[True, True, True],
         )
         model.to(device)
         DetectionCheckpointer(model).load(checkpoint)
@@ -421,6 +424,7 @@ Only one type of driving prompt must be provided for a given image.
             if promptType == "":
                 raise ValueError("Some images have no valid prompt to drive the matting process !!!")
             else:
+                logger.info(f"prompt type: {promptType}")
 
                 if not os.path.exists(chunk.node.output.value):
                     os.mkdir(chunk.node.output.value)
@@ -465,9 +469,14 @@ Only one type of driving prompt must be provided for a given image.
                             mask = maskRGB[:,:,0]
                             mask_sized = cv2.resize(mask, inference_size, interpolation=cv2.INTER_NEAREST)
                             mask_scaled = mask_sized.copy() * 2 - 1
-                            sample["mask"] = F.to_tensor(mask_scaled).float().unsqueeze(0)
-                            sample["mask_coords"] = np.array([0, 0, 1, 1])
-                            sample["mask_coords"] = torch.from_numpy(sample["mask_coords"]).float().unsqueeze(0)
+                            if promptType == "mask":
+                                sample["mask"] = F.to_tensor(mask_scaled).float().unsqueeze(0)
+                                sample["mask_coords"] = np.array([0, 0, 1, 1])
+                                sample["mask_coords"] = torch.from_numpy(sample["mask_coords"]).float().unsqueeze(0)
+                            else:
+                                sample["trimap"] = F.to_tensor(mask_scaled).float().unsqueeze(0)
+                                sample["trimap_coords"] = np.array([0, 0, 1, 1])
+                                sample["trimap_coords"] = torch.from_numpy(sample["trimap_coords"]).float().unsqueeze(0)
                         elif promptType == "auto_mask":
                             mask = np.ones_like(img)[:,:,0]
                             mask_sized = cv2.resize(mask, inference_size, interpolation=cv2.INTER_NEAREST)
