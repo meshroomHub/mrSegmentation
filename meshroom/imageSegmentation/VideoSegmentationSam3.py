@@ -346,7 +346,10 @@ In order to associate a point to a given submask, it must be colored with the su
                 sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
 
                 viewId = chunk_image_paths[idx][1]
-                frameId = chunk_image_paths[idx][2] - firstFrameId
+                if firstFrameId is None or chunk_image_paths[idx][2] is None:
+                    frameId = idx
+                else:
+                    frameId = chunk_image_paths[idx][2] - firstFrameId
 
                 objects = {}
                 if viewId is not None and viewId in posClickDictFromShape:
