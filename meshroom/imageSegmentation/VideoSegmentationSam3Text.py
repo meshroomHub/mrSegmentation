@@ -62,7 +62,7 @@ from a text prompt.
         desc.StringParam(
             name="prompt",
             label="Prompt",
-            description="What to segment, separated by point or one item per line.",
+            description="What to segment, one item per line.",
             value="person",
             semantic="multiline",
         ),
@@ -81,7 +81,9 @@ from a text prompt.
         desc.BoolParam(
             name="timeSlicing",
             label="Time Slicing",
-            description="Enable time slicing by adding text prompt every N frames and by propagating forward on N frames.",
+            description="Enable time slicing by adding text prompt every N frames and Propagating the masks over N frames.\n"
+                        "Propagation is forward only by default, or both forward and backward when 'Combine Forward and Backward Segmentation'\n"
+                        "is enabled.",
             value=False,
         ),
         desc.IntParam(
@@ -182,7 +184,7 @@ from a text prompt.
             label="Cryptomatte Forward",
             description="Cryptomatte resulting from forward propagation embedded in exr images.",
             semantic="image",
-            value=lambda attr: "{nodeCacheFolder}/cryptomatte_fwd_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
+            value=None, #lambda attr: "{nodeCacheFolder}/cryptomatte_fwd_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
             enabled=lambda node: node.outputCryptomatte.value,
             group="",
         ),
@@ -191,7 +193,7 @@ from a text prompt.
             label="Cryptomatte Backward",
             description="Cryptomatte resulting from backward propagation embedded in exr images.",
             semantic="image",
-            value=lambda attr: "{nodeCacheFolder}/cryptomatte_bwd_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
+            value=None, #lambda attr: "{nodeCacheFolder}/cryptomatte_bwd_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
             enabled=lambda node: node.outputCryptomatte.value and node.combineFwdAndBwdSeg.value,
             group="",
         ),
@@ -264,11 +266,13 @@ from a text prompt.
             raise ValueError(f'Text prompt is empty')
         self.textPrompts = re.split(r'[\n]+', node.prompt.value)
         self.textPrompts = [textPrompt for textPrompt in self.textPrompts if textPrompt]
-        node.colorMasksFwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_fwd_" + ("<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>") + ".png"
-        node.colorMasksBwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_bwd_" + ("<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>") + ".png"
+        srcFilename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
+        node.colorMasksFwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".png"
+        node.colorMasksBwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
+        node.cryptomatteFwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".png"
+        node.cryptomatteBwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
 
     def processChunk(self, chunk):
-        import re
         from segmentationRDS import image
         from sam3.model_builder import build_sam3_video_predictor
         import numpy as np
@@ -434,7 +438,7 @@ from a text prompt.
 
                         self.save_cryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
 
-                        if chunk.node.combineFwdAndBwdSeg.value:
+                        if chunk.node.combineFwdAndBwdSeg.value and frameId in outputs_per_frame_bwd.keys():
                             if chunk.node.keepFilename.value:
                                 cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
                             else:
@@ -453,7 +457,7 @@ from a text prompt.
 
                         image.writeImage(outputFileColorMask, colorMaskImageFwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
-                        if chunk.node.combineFwdAndBwdSeg.value:
+                        if chunk.node.combineFwdAndBwdSeg.value and frameId in outputs_per_frame_bwd.keys():
                             if chunk.node.keepFilename.value:
                                 outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
                             else:
