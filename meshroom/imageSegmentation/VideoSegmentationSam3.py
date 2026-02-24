@@ -75,6 +75,25 @@ In order to associate a point to a given submask, it must be colored with the su
             value="${RDS_SAM3_MODEL_PATH}",
         ),
         desc.BoolParam(
+            name="combineFwdAndBwdSeg",
+            label="Combine Forward and Backward Segmentation",
+            description="Launch segmentation in both forward and backward directions and combine masks.",
+            value=False,
+        ),
+        desc.BoolParam(
+            name="timeSlicing",
+            label="Time Slicing",
+            description="Enable time slicing by adding text prompt every N frames and by propagating forward on N frames.",
+            value=False,
+        ),
+        desc.IntParam(
+            name="sliceSize",
+            label="Slice Size",
+            description="Number of frames on which the mask is propagated.",
+            value=16,
+            enabled=lambda node: node.timeSlicing.value,
+        ),
+        desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
             description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
@@ -195,13 +214,16 @@ In order to associate a point to a given submask, it must be colored with the su
             frame_to_output[frame_idx] = _processed_out
         return frame_to_output
 
-    def propagate_in_video(self, predictor, session_id):
+    def propagate_in_video(self, predictor, session_id, start_frame_idx=None, max_frame_num_to_track=None, direction="both"):
         # we will just propagate from frame 0 to the end of the video
         outputs_per_frame = {}
         for response in predictor.handle_stream_request(
             request=dict(
                 type="propagate_in_video",
                 session_id=session_id,
+                propagation_direction=direction,
+                start_frame_idx=start_frame_idx,
+                max_frame_num_to_track=max_frame_num_to_track,
             )
         ):
             outputs_per_frame[response["frame_index"]] = response["outputs"]
@@ -339,6 +361,25 @@ In order to associate a point to a given submask, it must be colored with the su
 
             colorPalette = image.paletteGenerator()
             firstFrameId = chunk_image_paths[0][2]
+            frameNumber = len(chunk_image_paths)
+            frameIdxToTextPrompt_fwd = [0]
+            frameIdxToTextPrompt_bwd = [frameNumber - 1]
+            max_frame_num_to_track_fwd = None
+            if chunk.node.timeSlicing.value:
+                if chunk.node.sliceSize.value > 0 and chunk.node.sliceSize.value <= frameNumber:
+                    currFrameToTextPrompt_fwd = 0
+                    currFrameToTextPrompt_bwd = frameNumber - 1
+                    max_frame_num_to_track_fwd = chunk.node.sliceSize.value - 1
+                    max_frame_num_to_track_bwd = chunk.node.sliceSize.value
+                    while currFrameToTextPrompt_fwd + chunk.node.sliceSize.value < frameNumber:
+                        currFrameToTextPrompt_fwd += chunk.node.sliceSize.value
+                        frameIdxToTextPrompt_fwd.append(currFrameToTextPrompt_fwd)
+                    while currFrameToTextPrompt_bwd - chunk.node.sliceSize.value >= 0:
+                        currFrameToTextPrompt_bwd -= chunk.node.sliceSize.value
+                        frameIdxToTextPrompt_bwd.append(currFrameToTextPrompt_bwd)
+
+            logger.debug(f"frameIdxToTextPromptFwd: {frameIdxToTextPrompt_fwd}")
+            logger.debug(f"frameIdxToTextPromptBwd: {frameIdxToTextPrompt_bwd}")
             
             for idx, path in enumerate(chunk_image_paths):
                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
@@ -402,48 +443,76 @@ In order to associate a point to a given submask, it must be colored with the su
             )
             session_id = response["session_id"]
 
-            video_predictor.handle_request(
-                request=dict(
-                    type="add_prompt",
-                    session_id=session_id,
-                    frame_index=0,
-                    text=chunk.node.prompt.value,
-                )
-            )
+            # for f, bbox in bboxes.items():
+            #     video_predictor.handle_request(
+            #         request=dict(
+            #             type="add_prompt",
+            #             session_id=session_id,
+            #             frame_index=f,
+            #             bounding_boxes=bbox[0],
+            #             bounding_box_labels=bbox[1],
+            #         )
+            #     )
 
-            for f, bbox in bboxes.items():
+            outputs_per_frame_fwd = {}
+            for n, fIdx in enumerate(frameIdxToTextPrompt_fwd):
                 video_predictor.handle_request(
                     request=dict(
                         type="add_prompt",
                         session_id=session_id,
-                        frame_index=f,
-                        bounding_boxes=bbox[0],
-                        bounding_box_labels=bbox[1],
+                        frame_index=fIdx,
+                        text=chunk.node.prompt.value,
                     )
                 )
+                outputs_per_frame_curr_fwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_fwd, "forward")
+                #logger.debug(f"{outputs_per_frame_curr_fwd.keys()}")
+                outputs_per_frame_fwd.update(outputs_per_frame_curr_fwd)
 
-            self.propagate_in_video(video_predictor, session_id)
+            logger.debug(f"Fwd keys: {outputs_per_frame_fwd.keys()}")
 
-            for f, objects in clicks.items():
-                for obj_id, obj in objects.items():
+            video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
+
+            outputs_per_frame_bwd = {}
+            if chunk.node.combineFwdAndBwdSeg.value:
+                for n, fIdx in enumerate(frameIdxToTextPrompt_bwd):
                     video_predictor.handle_request(
                         request=dict(
                             type="add_prompt",
                             session_id=session_id,
-                            frame_index=f,
-                            points=torch.tensor(np.array(obj[0])),
-                            point_labels=torch.tensor(np.array(obj[1])),
-                            obj_id=obj_id
+                            frame_index=fIdx,
+                            text=chunk.node.prompt.value,
                         )
                     )
+                    outputs_per_frame_curr_bwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_bwd, "backward")
+                    #logger.debug(f"{outputs_per_frame_curr_bwd.keys()}")
+                    outputs_per_frame_bwd.update(outputs_per_frame_curr_bwd)
+                logger.debug(f"Bwd keys: {outputs_per_frame_bwd.keys()}")
 
-            outputs_per_frame = self.propagate_in_video(video_predictor, session_id)
+            #outputs_per_frame = {}
 
-            outputs_per_frame = self.prepare_masks_for_visualization(outputs_per_frame)
+            # for f, objects in clicks.items():
+            #     for obj_id, obj in objects.items():
+            #         video_predictor.handle_request(
+            #             request=dict(
+            #                 type="add_prompt",
+            #                 session_id=session_id,
+            #                 frame_index=f,
+            #                 points=torch.tensor(np.array(obj[0])),
+            #                 point_labels=torch.tensor(np.array(obj[1])),
+            #                 obj_id=obj_id
+            #             )
+            #         )
+
+                #outputs_per_frame = self.propagate_in_video(video_predictor, session_id, f, None)
+
+            #outputs_per_frame = self.propagate_in_video(video_predictor, session_id)
+
+            outputs_per_frame_fwd = self.prepare_masks_for_visualization(outputs_per_frame_fwd)
+            outputs_per_frame_bwd = self.prepare_masks_for_visualization(outputs_per_frame_bwd)
 
             video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
 
-            for frameId, masks in outputs_per_frame.items():
+            for frameId, masks in outputs_per_frame_fwd.items():
                 maskImage = np.zeros_like(img)
                 colorMaskImage = np.zeros_like(img)
                 if chunk.node.outputCryptomatte.value:
@@ -465,6 +534,9 @@ In order to associate a point to a given submask, it must be colored with the su
                         manifest[obj_name] = hex_val
                         crypto_id[mask] = f32_hash
                         crypto_cov[mask] = 1.0
+                if frameId in outputs_per_frame_bwd.keys():
+                    for key, mask in outputs_per_frame_bwd[frameId].items():
+                        maskImage[mask] = [255, 255, 255]
 
                 if chunk.node.outputCryptomatte.value:
                     spec = oiio.ImageSpec(img.shape[1], img.shape[0], 7, oiio.FLOAT)
