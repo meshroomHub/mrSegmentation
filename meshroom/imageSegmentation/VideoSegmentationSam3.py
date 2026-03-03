@@ -11,7 +11,7 @@ import logging
 logger = logging.getLogger("VideoSegmentationSam3")
 
 class Sam3VideoNodeSize(desc.MultiDynamicNodeSize):
-    def computeSize(self, node):
+    def __call__(self, node):
         if node.attribute(self._params[0]).isLink:
             return node.attribute(self._params[0]).inputLink.node.size
 
