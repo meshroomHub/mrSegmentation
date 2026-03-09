@@ -2,7 +2,6 @@ __version__ = "0.1"
 
 import os
 from pathlib import Path
-import struct
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
@@ -104,7 +103,6 @@ from a text prompt.
             label="Output Cryptomatte",
             description="Generate exr images containing cryptomatte to encode the segmentation results.",
             value=False,
-            enabled=lambda node: not node.timeSlicing.value,
         ),
         desc.BoolParam(
             name="outputColorMasks",
@@ -184,7 +182,7 @@ from a text prompt.
             label="Cryptomatte Forward",
             description="Cryptomatte resulting from forward propagation embedded in exr images.",
             semantic="image",
-            value=None, #lambda attr: "{nodeCacheFolder}/cryptomatte_fwd_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
+            value=None,
             enabled=lambda node: node.outputCryptomatte.value,
             group="",
         ),
@@ -193,66 +191,11 @@ from a text prompt.
             label="Cryptomatte Backward",
             description="Cryptomatte resulting from backward propagation embedded in exr images.",
             semantic="image",
-            value=None, #lambda attr: "{nodeCacheFolder}/cryptomatte_bwd_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
+            value=None,
             enabled=lambda node: node.outputCryptomatte.value and node.combineFwdAndBwdSeg.value,
             group="",
         ),
     ]
-
-    def prepare_masks_for_visualization(self, frame_to_output):
-        # frame_to_obj_masks --> {frame_idx: {'output_probs': np.array, `out_obj_ids`: np.array, `out_binary_masks`: np.array}}
-        for frame_idx, out in frame_to_output.items():
-            _processed_out = {}
-            for idx, obj_id in enumerate(out["out_obj_ids"].tolist()):
-                if out["out_binary_masks"][idx].any():
-                    _processed_out[obj_id] = out["out_binary_masks"][idx]
-            frame_to_output[frame_idx] = _processed_out
-        return frame_to_output
-
-    def propagate_in_video(self, predictor, session_id, start_frame_idx=None, max_frame_num_to_track=None, direction="both"):
-        # we will just propagate from frame 0 to the end of the video
-        outputs_per_frame = {}
-        for response in predictor.handle_stream_request(
-            request=dict(
-                type="propagate_in_video",
-                session_id=session_id,
-                propagation_direction=direction,
-                start_frame_idx=start_frame_idx,
-                max_frame_num_to_track=max_frame_num_to_track,
-            )
-        ):
-            outputs_per_frame[response["frame_index"]] = response["outputs"]
-        return outputs_per_frame
-        
-    def hash_name(self, name):
-        import mmh3
-        import numpy as np
-        hash_32 = mmh3.hash(name, seed=0) & 0xFFFFFFFF
-        f32_val = np.frombuffer(struct.pack('<I', hash_32), dtype=np.float32)[0]
-        f32_hex = hex(struct.unpack('<I', struct.pack('<f', f32_val))[0])[2:]
-        return f32_val, f32_hex, hash_32
-
-    def save_cryptomatte(self, filepath, crypto_name, w, h, manifest, crypto_id, crypto_cov):
-        import OpenImageIO as oiio
-        import json
-        import numpy as np
-
-        spec = oiio.ImageSpec(w, h, 7, oiio.FLOAT)
-        spec.channelnames = (crypto_name+".red", crypto_name+".green", crypto_name+".blue",
-                            crypto_name+"00.red", crypto_name+"00.green", crypto_name+"00.blue", crypto_name+"00.alpha")
-        _, _, h32 = self.hash_name(crypto_name)
-        crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
-        spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
-        spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest))
-        spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
-        spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
-
-        crypto_zeros = np.zeros((h, w), dtype=np.float32)
-        cryptomatteImg = oiio.ImageOutput.create(str(filepath))
-        cryptomatteImg.open(filepath, spec)
-        cryptomatte_data = np.dstack((crypto_zeros, crypto_zeros, crypto_zeros, crypto_id, crypto_cov, crypto_zeros, crypto_zeros))
-        cryptomatteImg.write_image(cryptomatte_data)
-        cryptomatteImg.close()
 
     def preprocess(self, node):
         import re
@@ -265,7 +208,7 @@ from a text prompt.
         if node.prompt.value == "":
             raise ValueError(f'Text prompt is empty')
         self.textPrompts = re.split(r'[\n]+', node.prompt.value)
-        self.textPrompts = [textPrompt for textPrompt in self.textPrompts if textPrompt]
+        self.textPrompts = [str(textPrompt) for textPrompt in self.textPrompts if textPrompt]
         srcFilename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
         node.colorMasksFwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".png"
         node.colorMasksBwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
@@ -273,12 +216,13 @@ from a text prompt.
         node.cryptomatteBwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
 
     def processChunk(self, chunk):
-        from segmentationRDS import image
+        from segmentationRDS import image, sam3Utils
         from sam3.model_builder import build_sam3_video_predictor
         import numpy as np
         import torch
         from pyalicevision import image as avimg
         from PIL import Image
+        import json
 
         try:
             logger.setLevel(chunk.node.verboseLevel.value.upper())
@@ -309,26 +253,23 @@ from a text prompt.
             colorPalette = image.paletteGenerator()
             firstFrameId = chunk_image_paths[0][2]
             frameNumber = len(chunk_image_paths)
-            frameIdxToTextPrompt_fwd = [0]
-            frameIdxToTextPrompt_bwd = [frameNumber - 1]
-            max_frame_num_to_track_fwd = None
-            max_frame_num_to_track_bwd = None
-            if chunk.node.timeSlicing.value:
-                if chunk.node.sliceSize.value > 0 and chunk.node.sliceSize.value <= frameNumber:
-                    currFrameToTextPrompt_fwd = 0
-                    currFrameToTextPrompt_bwd = frameNumber - 1
-                    max_frame_num_to_track_fwd = chunk.node.sliceSize.value - 1
-                    max_frame_num_to_track_bwd = chunk.node.sliceSize.value
-                    while currFrameToTextPrompt_fwd + chunk.node.sliceSize.value < frameNumber:
-                        currFrameToTextPrompt_fwd += chunk.node.sliceSize.value
-                        frameIdxToTextPrompt_fwd.append(currFrameToTextPrompt_fwd)
-                    while currFrameToTextPrompt_bwd - chunk.node.sliceSize.value >= 0:
-                        currFrameToTextPrompt_bwd -= chunk.node.sliceSize.value
-                        frameIdxToTextPrompt_bwd.append(currFrameToTextPrompt_bwd)
 
-            logger.debug(f"frameIdxToTextPromptFwd: {frameIdxToTextPrompt_fwd}")
-            logger.debug(f"frameIdxToTextPromptBwd: {frameIdxToTextPrompt_bwd}")
-            
+            frameIdxToTextPrompt = [0]
+            max_frame_num_to_track = None
+            track_dir = "forward"
+            if chunk.node.timeSlicing.value:
+                max_frame_num_to_track = chunk.node.sliceSize.value
+                currFrameToTextPrompt = 0
+                while currFrameToTextPrompt + chunk.node.sliceSize.value < frameNumber:
+                    currFrameToTextPrompt += chunk.node.sliceSize.value
+                    frameIdxToTextPrompt.append(currFrameToTextPrompt)
+            if chunk.node.combineFwdAndBwdSeg.value:
+                track_dir = "both"
+                if frameIdxToTextPrompt[-1] < frameNumber - 1:
+                    frameIdxToTextPrompt.append(frameNumber - 1)
+
+            logger.info(f"frameIdxToTextPrompt: {frameIdxToTextPrompt}; direction = {track_dir}")
+
             for idx, path in enumerate(chunk_image_paths):
                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
                 pil_images.append(Image.fromarray((255.0*img).astype("uint8")))
@@ -348,12 +289,21 @@ from a text prompt.
             )
             session_id = response["session_id"]
 
+            boxes = {}
+
             for textPrompt in self.textPrompts:
+
+                logger.info(f"textPrompt: {textPrompt}")
+                boxes[textPrompt] = {"forward": {}, "backward": {}}
+                cryptoName = "object" if textPrompt == "" else textPrompt
 
                 video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
 
+                outputs_per_frame = {}
                 outputs_per_frame_fwd = {}
-                for n, fIdx in enumerate(frameIdxToTextPrompt_fwd):
+                outputs_per_frame_bwd = {}
+                max_obj_id = 0
+                for n, fIdx in enumerate(frameIdxToTextPrompt):
                     video_predictor.handle_request(
                         request=dict(
                             type="add_prompt",
@@ -362,131 +312,189 @@ from a text prompt.
                             text=textPrompt,
                         )
                     )
-                    outputs_per_frame_curr_fwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_fwd, "forward")
-                    outputs_per_frame_fwd.update(outputs_per_frame_curr_fwd)
+                    outputs_per_frame[fIdx] = sam3Utils.propagateInVideo(video_predictor, session_id, fIdx, max_frame_num_to_track, track_dir)
 
-                logger.debug(f"Fwd keys: {outputs_per_frame_fwd.keys()}")
+                    max_obj_id_at_fIdx = 0
+                    for f, obj in outputs_per_frame[fIdx].items():
+                        max_obj_id_at_fIdx_f = -1
+                        if len(obj["out_obj_ids"].tolist()) > 0:
+                            max_obj_id_at_fIdx_f = max(obj["out_obj_ids"].tolist())
+                        if max_obj_id_at_fIdx_f > max_obj_id_at_fIdx:
+                            max_obj_id_at_fIdx = max_obj_id_at_fIdx_f
+                    if max_obj_id_at_fIdx > max_obj_id:
+                        max_obj_id = max_obj_id_at_fIdx
 
-                video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
+                    logger.debug(f"max_obj_id = {max_obj_id}")
 
-                outputs_per_frame_bwd = {}
-                if chunk.node.combineFwdAndBwdSeg.value:
-                    for n, fIdx in enumerate(frameIdxToTextPrompt_bwd):
-                        video_predictor.handle_request(
-                            request=dict(
-                                type="add_prompt",
-                                session_id=session_id,
-                                frame_index=fIdx,
-                                text=textPrompt,
-                            )
-                        )
-                        outputs_per_frame_curr_bwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_bwd, "backward")
-                        outputs_per_frame_bwd.update(outputs_per_frame_curr_bwd)
-                    logger.debug(f"Bwd keys: {outputs_per_frame_bwd.keys()}")
+                    colorPalette.generate_palette(max_obj_id + 1)
 
-                outputs_per_frame_fwd = self.prepare_masks_for_visualization(outputs_per_frame_fwd)
-                outputs_per_frame_bwd = self.prepare_masks_for_visualization(outputs_per_frame_bwd)
+                    if n == 0:
+                        outputs_per_frame_fwd[fIdx] = outputs_per_frame[fIdx]
+                        outputs_per_frame_bwd[fIdx] = outputs_per_frame[fIdx]
+                    else:
 
-                for frameId, masks in outputs_per_frame_fwd.items():
-                    colorMaskImageFwd = np.zeros_like(img)
-                    if chunk.node.outputCryptomatte.value:
-                        crypto_id_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                        crypto_cov_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                        manifest_fwd = {}
+                        logger.debug(f"Inputs for mapping at key frame {fIdx}")
+                        logger.debug(f"Detected Objects at frame {fIdx}:")
+                        sam3Utils.displayAt(outputs_per_frame, fIdx, fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+                        logger.debug(f"Propagated Objects at frame {fIdx} from frame {frameIdxToTextPrompt[n - 1]}:")
+                        sam3Utils.displayAt(outputs_per_frame_fwd, frameIdxToTextPrompt[n - 1], fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
 
-                    if len(masks.keys()) > 0:
-                        colorPalette.generate_palette(max(masks.keys()) + 1)
+                        mapping_fwd = sam3Utils.mapIds(outputs_per_frame[fIdx][fIdx], outputs_per_frame_fwd[frameIdxToTextPrompt[n - 1]][fIdx],
+                                                       sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
 
-                    cryptoName = "object" if textPrompt == "" else textPrompt
-                    for key, mask in masks.items():
-                        mask_images[frameId][mask] = [255, 255, 255]
-                        color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                        colorMaskImageFwd[mask] = [x/255.0 for x in color]
+                        logger.debug(f"mapping fwd at key frame {fIdx}:\n{mapping_fwd}")
+
+                        outputs_per_frame_fwd[fIdx] = sam3Utils.updateSam3ObjectIds(outputs_per_frame[fIdx], mapping_fwd)
+
+                        del outputs_per_frame_fwd[frameIdxToTextPrompt[n - 1]]
+
+                        logger.debug(f"Output after mapping fwd has been applied at key frame {fIdx}")
+                        sam3Utils.displayAt(outputs_per_frame_fwd, fIdx, fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+
+                        if chunk.node.combineFwdAndBwdSeg.value:
+
+                            logger.debug(f"Inputs for mapping at key frame {frameIdxToTextPrompt[n - 1]}")
+                            logger.debug(f"Detected Objects at frame {frameIdxToTextPrompt[n - 1]}:")
+                            sam3Utils.displayAt(outputs_per_frame_bwd, frameIdxToTextPrompt[n - 1], frameIdxToTextPrompt[n - 1], sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+                            logger.debug(f"Propagated Objects at frame {frameIdxToTextPrompt[n - 1]} from frame {fIdx}:")
+                            sam3Utils.displayAt(outputs_per_frame, fIdx, frameIdxToTextPrompt[n - 1], sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+
+                            mapping_bwd = sam3Utils.mapIds(outputs_per_frame[fIdx][frameIdxToTextPrompt[n - 1]],
+                                                           outputs_per_frame_bwd[frameIdxToTextPrompt[n - 1]][frameIdxToTextPrompt[n - 1]],
+                                                           sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+
+                            logger.debug(f"mapping bwd at key frame {frameIdxToTextPrompt[n - 1]}:\n{mapping_bwd}")
+
+                            outputs_per_frame_bwd[fIdx] = sam3Utils.updateSam3ObjectIds(outputs_per_frame[fIdx], mapping_bwd)
+
+                            del outputs_per_frame_bwd[frameIdxToTextPrompt[n - 1]]
+
+                            logger.debug(f"Output after mapping bwd has been applied at key frame {fIdx}")
+                            sam3Utils.displayAt(outputs_per_frame_bwd, fIdx, fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+
+                        del outputs_per_frame[frameIdxToTextPrompt[n - 1]]
+
+
+                    logger.debug(f"Keys: {outputs_per_frame_fwd[fIdx].keys()}")
+
+                    # write Fwd from fIdx to frameIdxToTextPrompt[n + 1]
+                    lastFIdxFwd = frameIdxToTextPrompt[n + 1] if n < len(frameIdxToTextPrompt) - 1 else fIdx + 1
+                    outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame_fwd[fIdx])
+
+                    logger.debug(f"Extract boxes for frame Fwd from : {fIdx} to {lastFIdxFwd - 1}")
+
+                    for frameId in range(fIdx, lastFIdxFwd):
+                        colorMaskImageFwd = np.zeros_like(img)
                         if chunk.node.outputCryptomatte.value:
-                            obj_name = f"{cryptoName}_fwd_{int(key)}"
-                            f32_hash, hex_val, _ = self.hash_name(obj_name)
-                            manifest_fwd[obj_name] = hex_val
-                            crypto_id_fwd[mask] = f32_hash
-                            crypto_cov_fwd[mask] = 1.0
-
-                    if frameId in outputs_per_frame_bwd.keys():
-                        colorMaskImageBwd = np.zeros_like(img)
-                        if chunk.node.outputCryptomatte.value:
-                            crypto_id_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                            crypto_cov_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                            manifest_bwd = {}
-
-                        if len(outputs_per_frame_bwd[frameId].keys()) > 0:
-                            colorPalette.generate_palette(max(outputs_per_frame_bwd[frameId].keys()) + 1)
-
-                        for key, mask in outputs_per_frame_bwd[frameId].items():
+                            crypto_id_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
+                            crypto_cov_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
+                            manifest_fwd = {}
+                        boxes[textPrompt]["forward"][frameId] = {}
+                        for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
+                            mask = maskBoxProb["mask"]
                             mask_images[frameId][mask] = [255, 255, 255]
                             color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                            colorMaskImageBwd[mask] = [x/255.0 for x in color]
+                            colorMaskImageFwd[mask] = [x/255.0 for x in color]
+
                             if chunk.node.outputCryptomatte.value:
-                                obj_name = f"{cryptoName}_bwd_{int(key)}"
-                                f32_hash, hex_val, _ = self.hash_name(obj_name)
-                                manifest_bwd[obj_name] = hex_val
-                                crypto_id_bwd[mask] = f32_hash
-                                crypto_cov_bwd[mask] = 1.0
+                                obj_name = f"{cryptoName}_fwd_{int(key)}"
+                                f32_hash, hex_val, _ = image.hash_name(obj_name)
+                                manifest_fwd[obj_name] = hex_val
+                                crypto_id_fwd[mask] = f32_hash
+                                crypto_cov_fwd[mask] = 1.0
 
-                    if chunk.node.outputCryptomatte.value:
-                        if chunk.node.keepFilename.value:
-                            cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                        else:
-                            cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
+                            bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
+                            boxes[textPrompt]["forward"][frameId][key] = bbox
 
-                        self.save_cryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
-
-                        if chunk.node.combineFwdAndBwdSeg.value and frameId in outputs_per_frame_bwd.keys():
+                        if chunk.node.outputColorMasks.value:
                             if chunk.node.keepFilename.value:
-                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
+                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
                             else:
-                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
+                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".png")
 
-                            self.save_cryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
+                            optWrite = avimg.ImageWriteOptions()
+                            optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
 
-                    if chunk.node.outputColorMasks.value:
-                        if chunk.node.keepFilename.value:
-                            outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
-                        else:
-                            outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".png")
+                            image.writeImage(outputFileColorMask, colorMaskImageFwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
-                        optWrite = avimg.ImageWriteOptions()
-                        optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-
-                        image.writeImage(outputFileColorMask, colorMaskImageFwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
-
-                        if chunk.node.combineFwdAndBwdSeg.value and frameId in outputs_per_frame_bwd.keys():
+                        if chunk.node.outputCryptomatte.value:
                             if chunk.node.keepFilename.value:
-                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
+                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
                             else:
-                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".png")
+                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
 
-                            image.writeImage(outputFileColorMask, colorMaskImageBwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                            image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
+
+                    if chunk.node.combineFwdAndBwdSeg.value:
+
+                        # write Bwd from frameIdxToTextPrompt[n - 1] to fIdx
+                        firstFIdxBwd = frameIdxToTextPrompt[n - 1] + 1 if n > 0 else fIdx
+                        outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame_bwd[fIdx])
+                        for frameId in range(firstFIdxBwd, fIdx + 1):
+                            colorMaskImageBwd = np.zeros_like(img)
+                            if chunk.node.outputCryptomatte.value:
+                                crypto_id_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
+                                crypto_cov_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
+                                manifest_bwd = {}
+                            boxes[textPrompt]["backward"][frameId] = {}
+                            for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
+                                mask = maskBoxProb["mask"]
+                                mask_images[frameId][mask] = [255, 255, 255]
+                                color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
+                                colorMaskImageBwd[mask] = [x/255.0 for x in color]
+                                if chunk.node.outputCryptomatte.value:
+                                    obj_name = f"{cryptoName}_bwd_{int(key)}"
+                                    f32_hash, hex_val, _ = image.hash_name(obj_name)
+                                    manifest_bwd[obj_name] = hex_val
+                                    crypto_id_bwd[mask] = f32_hash
+                                    crypto_cov_bwd[mask] = 1.0
+                                bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
+                                boxes[textPrompt]["backward"][frameId][key] = bbox
+
+                            if chunk.node.outputColorMasks.value:
+                                if chunk.node.keepFilename.value:
+                                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
+                                else:
+                                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".png")
+
+                                optWrite = avimg.ImageWriteOptions()
+                                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+
+                                image.writeImage(outputFileColorMask, colorMaskImageBwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+
+                            if chunk.node.outputCryptomatte.value:
+                                if chunk.node.keepFilename.value:
+                                    cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
+                                else:
+                                    cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
+
+                                image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
+
+                for frameId in range(frameNumber):
+                    if chunk.node.maskInvert.value:
+                        mask = (mask_images[frameId][:,:,0:1] == 0).astype('float32')
+                    else:
+                        mask = (mask_images[frameId][:,:,0:1] > 0).astype('float32')
+                    logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
+
+                    if chunk.node.keepFilename.value:
+                        outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
+                    else:
+                        outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." + chunk.node.extensionOut.value)
+
+                    optWrite = avimg.ImageWriteOptions()
+                    optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                    if Path(outputFileMask).suffix.lower() == ".exr":
+                        optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                        optWrite.exrCompressionLevel(300)
+
+                    image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+
+            jsonFilename = chunk.node.output.value + "/bboxes.json"
+            with open(jsonFilename, "w", encoding="utf_8") as f:
+                json.dump(boxes, f, indent=4, ensure_ascii=False)
 
             video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
-
-            for frameId in outputs_per_frame_fwd.keys():
-
-                if chunk.node.maskInvert.value:
-                    mask = (mask_images[frameId][:,:,0:1] == 0).astype('float32')
-                else:
-                    mask = (mask_images[frameId][:,:,0:1] > 0).astype('float32')
-                logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
-
-                if chunk.node.keepFilename.value:
-                    outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
-                else:
-                    outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." + chunk.node.extensionOut.value)
-
-                optWrite = avimg.ImageWriteOptions()
-                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                if Path(outputFileMask).suffix.lower() == ".exr":
-                    optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
-                    optWrite.exrCompressionLevel(300)
-
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
         finally:
             torch.cuda.empty_cache()
