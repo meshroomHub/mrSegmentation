@@ -443,7 +443,7 @@ from a text prompt.
                                 color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
                                 colorMaskImageBwd[mask] = [x/255.0 for x in color]
                                 if chunk.node.outputCryptomatte.value:
-                                    obj_name = f"{cryptoName}_fwd_{int(key)}"
+                                    obj_name = f"{cryptoName}_bwd_{int(key)}"
                                     f32_hash, hex_val, _ = image.hash_name(obj_name)
                                     manifest_bwd[obj_name] = hex_val
                                     crypto_id_bwd[mask] = f32_hash

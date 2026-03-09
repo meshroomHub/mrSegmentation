@@ -33,7 +33,7 @@ def boxInterOverSmallest(xywh1, xywh2):
     area1 = w1 * h1
     area2 = w2 * h2
     if area1 == 0 or area2 == 0:
-        return 0
+        return (0, (0, 0, 0, 0))
     x_inter_min = max(x1, x2)
     y_inter_min = max(y1, y2)
     x_inter_max = min(x1 + w1, x2 + w2)
@@ -123,4 +123,6 @@ def mapIds(outputs_per_frame_detected, outputs_per_frame_propagated, w, h, logge
             if mapping[idSrc] == -1:
                 if idSrc in mapping.values():
                     mapping[idSrc] = max(mapping.values()) + 1
+                else:
+                    mapping[idSrc] = idSrc
     return mapping
