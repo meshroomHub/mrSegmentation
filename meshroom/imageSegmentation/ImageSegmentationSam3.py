@@ -54,7 +54,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
             enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.StringParam(
@@ -110,7 +109,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
         ),
         desc.BoolParam(
             name="splitBoxPrompt",
@@ -165,7 +163,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
-            group="",
         ),
     ]
 

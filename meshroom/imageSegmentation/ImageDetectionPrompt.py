@@ -57,7 +57,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
             enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
@@ -140,7 +139,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             values=["png", "jpg"],
             exclusive=True,
             enabled=lambda node: node.outputBboxImage.value,
-            group="",  # remove from command line params
         ),
         desc.ChoiceParam(
             name="verboseLevel",
@@ -166,7 +164,6 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
             enabled=lambda node: node.outputBboxImage.value,
-            group="",
         ),
     ]
 

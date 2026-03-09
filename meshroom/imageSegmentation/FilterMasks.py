@@ -57,7 +57,6 @@ class FilterMasks(desc.Node):
             description='For spatial filtering, the size of the kernel. For temporal filtering, the size of the window',
             value=3,
             range=(3, 100000, 1),
-            group="opt",
             enabled=lambda node:node.filterType.value in ['erosion', 'dilation', 'opening', 'closing', 'blur', 'temporal_filtering', 'guided_filtering']
         ),
 
@@ -68,7 +67,6 @@ class FilterMasks(desc.Node):
             value='rect',
             values=['rect', 'ellipse', 'cross'],
             exclusive=True,
-            group="opt",
             enabled=lambda node:node.filterType.value in ['erosion', 'dilation', 'opening', 'closing']
         ),
 
@@ -78,7 +76,6 @@ class FilterMasks(desc.Node):
             description='Number of time to perform the filtering',
             value=1,
             range=(1, 100000, 1),
-            group="opt",
             enabled=lambda node:node.filterType.value in ['erosion', 'dilation']
         ),
 
@@ -87,7 +84,6 @@ class FilterMasks(desc.Node):
             label='Use optical flow',
             description='Will warp the images using optical flow',
             value=False,
-            group="opt",
             enabled=lambda node:node.filterType.value =='temporal_filtering'
         ),
 
@@ -97,7 +93,6 @@ class FilterMasks(desc.Node):
             description='Stength of the smoothing',
             value=0.05,
             range=(0.0, 0.05, 1.0),
-            group="opt",
             enabled=lambda node:node.filterType.value =='guided_filtering',
         ),
 
@@ -118,7 +113,6 @@ class FilterMasks(desc.Node):
             label='outputFolder',
             description='outputFolder',
             value="{nodeCacheFolder}",
-            group='',
         ),
         desc.File(
             name='masks',
@@ -126,7 +120,6 @@ class FilterMasks(desc.Node):
             description='Generated segmentation masks.',
             semantic='image',
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
-            group='',
             visible=False
         ),
     ]
@@ -184,8 +177,9 @@ class FilterMasks(desc.Node):
         filter_function = eval('filtering.Operations.'+chunk.node.filterType.value)
         
         kargs={}
+        optParams = ['kernel_size', 'kernel_shape', 'iterations', 'use_of', 'smoothing_strength']
         for a in chunk.node.attributes:
-            if a.desc.group=='opt':
+            if a.name in optParams:
                 kargs[a.name]=a.value 
         chunk.logger.info(kargs)
         filtered_masks = filter_function(masks,images=images,**kargs)

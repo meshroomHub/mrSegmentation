@@ -58,7 +58,6 @@ In order to associate a point to a given submask, it must be colored with the su
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
             enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.StringParam(
@@ -127,7 +126,6 @@ In order to associate a point to a given submask, it must be colored with the su
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
         ),
         desc.ChoiceParam(
             name="verboseLevel",
@@ -183,7 +181,6 @@ In order to associate a point to a given submask, it must be colored with the su
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
-            group="",
         ),
         desc.File(
             name="colorMasks",
@@ -191,7 +188,6 @@ In order to associate a point to a given submask, it must be colored with the su
             description="Generated segmentation masks with color corresponding to item indexes.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/colorMask_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".png",
-            group="",
         ),
         desc.File(
             name="cryptomatte",
@@ -200,7 +196,6 @@ In order to associate a point to a given submask, it must be colored with the su
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
             enabled=lambda node: node.outputCryptomatte.value,
-            group="",
         ),
     ]
 
