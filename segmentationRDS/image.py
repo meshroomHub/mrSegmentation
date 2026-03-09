@@ -231,6 +231,37 @@ def addText(image: np.ndarray, text, x, y, size, color = (255, 0, 0)) -> np.ndar
     oiio.ImageBufAlgo.render_text(buf, int(x), int(y), text, int(size), "", color)
     return buf.get_pixels(format='uint8')
 
+def hash_name(name):
+    import struct
+    import mmh3
+    import numpy as np
+    hash_32 = mmh3.hash(name, seed=0) & 0xFFFFFFFF
+    f32_val = np.frombuffer(struct.pack('<I', hash_32), dtype=np.float32)[0]
+    f32_hex = hex(struct.unpack('<I', struct.pack('<f', f32_val))[0])[2:]
+    return f32_val, f32_hex, hash_32
+
+def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_cov):
+    import OpenImageIO as oiio
+    import json
+    import numpy as np
+
+    spec = oiio.ImageSpec(w, h, 7, oiio.FLOAT)
+    spec.channelnames = (crypto_name+".red", crypto_name+".green", crypto_name+".blue",
+                        crypto_name+"00.red", crypto_name+"00.green", crypto_name+"00.blue", crypto_name+"00.alpha")
+    _, _, h32 = hash_name(crypto_name)
+    crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
+    spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
+    spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest))
+    spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
+    spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
+
+    crypto_zeros = np.zeros((h, w), dtype=np.float32)
+    cryptomatteImg = oiio.ImageOutput.create(str(filepath))
+    cryptomatteImg.open(filepath, spec)
+    cryptomatte_data = np.dstack((crypto_zeros, crypto_zeros, crypto_zeros, crypto_id, crypto_cov, crypto_zeros, crypto_zeros))
+    cryptomatteImg.write_image(cryptomatte_data)
+    cryptomatteImg.close()
+
 class paletteGenerator:
     def __init__(self, seed=42):
         self.seed = seed
