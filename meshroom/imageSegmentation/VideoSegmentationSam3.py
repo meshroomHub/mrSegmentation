@@ -365,6 +365,7 @@ In order to associate a point to a given submask, it must be colored with the su
             frameIdxToTextPrompt_fwd = [0]
             frameIdxToTextPrompt_bwd = [frameNumber - 1]
             max_frame_num_to_track_fwd = None
+            max_frame_num_to_track_bwd = None
             if chunk.node.timeSlicing.value:
                 if chunk.node.sliceSize.value > 0 and chunk.node.sliceSize.value <= frameNumber:
                     currFrameToTextPrompt_fwd = 0
