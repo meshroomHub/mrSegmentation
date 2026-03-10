@@ -79,7 +79,6 @@ In case neither tracker nor json file is available, the model is applied on the 
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
         ),
         desc.BoolParam(
             name="outputBboxImage",
@@ -110,7 +109,6 @@ In case neither tracker nor json file is available, the model is applied on the 
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extension.value,
-            group="",
         ),
         desc.File(
             name="bboxes",
@@ -119,7 +117,6 @@ In case neither tracker nor json file is available, the model is applied on the 
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/bboxes_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".jpg",
             enabled=lambda node: node.outputBboxImage.value,
-            group="",
         ),
     ]
 

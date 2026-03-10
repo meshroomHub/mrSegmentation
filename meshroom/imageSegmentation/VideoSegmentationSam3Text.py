@@ -55,7 +55,6 @@ from a text prompt.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
             enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.StringParam(
@@ -132,7 +131,6 @@ from a text prompt.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
         ),
         desc.ChoiceParam(
             name="verboseLevel",
@@ -157,7 +155,6 @@ from a text prompt.
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
-            group="",
         ),
         desc.File(
             name="colorMasksFwd",
@@ -166,7 +163,6 @@ from a text prompt.
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value,
-            group="",
         ),
         desc.File(
             name="colorMasksBwd",
@@ -175,7 +171,6 @@ from a text prompt.
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
-            group="",
         ),
         desc.File(
             name="cryptomatteFwd",
@@ -184,7 +179,6 @@ from a text prompt.
             semantic="image",
             value=None,
             enabled=lambda node: node.outputCryptomatte.value,
-            group="",
         ),
         desc.File(
             name="cryptomatteBwd",
@@ -193,7 +187,6 @@ from a text prompt.
             semantic="image",
             value=None,
             enabled=lambda node: node.outputCryptomatte.value and node.combineFwdAndBwdSeg.value,
-            group="",
         ),
     ]
 

@@ -57,7 +57,6 @@ Only one type of driving prompt must be provided for a given image.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
             enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
@@ -81,7 +80,6 @@ Only one type of driving prompt must be provided for a given image.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
         ),
         desc.ChoiceParam(
             name="inferenceSize",
@@ -119,7 +117,6 @@ Only one type of driving prompt must be provided for a given image.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
         ),
         desc.ChoiceParam(
             name="verboseLevel",
@@ -168,7 +165,6 @@ Only one type of driving prompt must be provided for a given image.
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
-            group="",
         ),
     ]
 

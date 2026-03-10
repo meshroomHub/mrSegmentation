@@ -65,7 +65,6 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
             enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
@@ -114,7 +113,6 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
         ),
         desc.BoolParam(
             name="outputBboxImage",
@@ -145,7 +143,6 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
-            group="",
         ),
         desc.File(
             name="bboxes",
@@ -154,7 +151,6 @@ In case bounding boxes and clicks are provided, only clicks inside bounding boxe
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/bboxes_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".jpg",
             enabled=lambda node: node.outputBboxImage.value,
-            group="",
         ),
     ]
 

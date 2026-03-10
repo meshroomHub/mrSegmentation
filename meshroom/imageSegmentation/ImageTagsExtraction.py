@@ -52,7 +52,6 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
-            group="",  # remove from command line params
             enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
@@ -89,7 +88,6 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             values=["png", "jpg"],
             exclusive=True,
             enabled=lambda node: node.outputTaggedImage.value,
-            group="",  # remove from command line params
         ),
         desc.ChoiceParam(
             name="verboseLevel",
@@ -114,7 +112,6 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             description="Generated images.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
-            group="",
         ),
     ]
 
