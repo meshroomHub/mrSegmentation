@@ -314,9 +314,12 @@ In order to associate a point to a given submask, it must be colored with the su
             negClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.negativeClicks)
             posBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.boxPrompt)
 
+            prompt = chunk.node.prompt.value.splitlines()[0]
+
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video"
+            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = prompt
 
             pil_images = []
             clicks = {}
@@ -414,7 +417,7 @@ In order to associate a point to a given submask, it must be colored with the su
                         type="add_prompt",
                         session_id=session_id,
                         frame_index=fIdx,
-                        text=chunk.node.prompt.value,
+                        text=prompt,
                     )
                 )
                 outputs_per_frame_curr_fwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_fwd, "forward")
@@ -432,7 +435,7 @@ In order to associate a point to a given submask, it must be colored with the su
                             type="add_prompt",
                             session_id=session_id,
                             frame_index=fIdx,
-                            text=chunk.node.prompt.value,
+                            text=prompt,
                         )
                     )
                     outputs_per_frame_curr_bwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_bwd, "backward")
@@ -455,7 +458,7 @@ In order to associate a point to a given submask, it must be colored with the su
 
                 if len(masks.keys()) > 0:
                     colorPalette.generate_palette(max(masks.keys()) + 1)
-                cryptoName = "object" if chunk.node.prompt.value == "" else chunk.node.prompt.value
+                cryptoName = "object" if prompt == "" else prompt
                 for key, mask in masks.items():
                     maskImage[mask] = [255, 255, 255]
                     color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
