@@ -1,4 +1,4 @@
-__version__ = "0.1"
+__version__ = "1.0"
 
 import os
 from pathlib import Path
@@ -6,36 +6,16 @@ import struct
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
+from pyalicevision import parallelization as avpar
 
 import logging
 logger = logging.getLogger("VideoSegmentationSam3")
 
-class Sam3VideoNodeSize(desc.MultiDynamicNodeSize):
-    def computeSize(self, node):
-        if node.attribute(self._params[0]).isLink:
-            return node.attribute(self._params[0]).inputLink.node.size
-
-        from pathlib import Path
-
-        input_path_param = node.attribute(self._params[0])
-        extension_param = node.attribute(self._params[1])
-        input_path = input_path_param.value
-        extension = extension_param.value
-        include_suffixes = [extension.lower(), extension.upper()]
-
-        size = 1
-        if Path(input_path).is_dir():
-            import itertools
-            image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-            size = len(image_paths)
-        
-        return size
-        
 class VideoSegmentationSam3(desc.Node):
-    size = Sam3VideoNodeSize(['input', 'extensionIn'])
+    size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.EXTREME
 
-    category = "Utils"
+    category = "Segmentation"
     documentation = """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
 from a text prompt, a single bounding box or a set of positive and negative clicks (Clicks In/Out).
@@ -47,18 +27,8 @@ In order to associate a point to a given submask, it must be colored with the su
         desc.File(
             name="input",
             label="Input",
-            description="Folder or SfMData file.",
+            description="SfMData file.",
             value="",
-        ),
-        desc.ChoiceParam(
-            name="extensionIn",
-            label="Input File Extension",
-            description="Input image file extension.\n"
-                        "Considered only if input is a folder.",
-            value="exr",
-            values=["exr", "png", "jpg"],
-            exclusive=True,
-            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.StringParam(
             name="prompt",
@@ -115,8 +85,7 @@ In order to associate a point to a given submask, it must be colored with the su
             name="keepFilename",
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
-            value=False,
-            enabled=lambda node: not Path(node.input.value).is_dir(),
+            value=True,
         ),
         desc.ChoiceParam(
             name="extensionOut",
@@ -305,9 +274,8 @@ In order to associate a point to a given submask, it must be colored with the su
 
 
     def preprocess(self, node):
-        extension = node.extensionIn.value
         input_path = node.input.value
-        image_paths = get_image_paths_list(input_path, extension)
+        image_paths = get_image_paths_list(input_path)
         if len(image_paths) == 0:
             raise FileNotFoundError(f'No image files found in {input_path}')
         self.image_paths = image_paths
@@ -439,17 +407,6 @@ In order to associate a point to a given submask, it must be colored with the su
             )
             session_id = response["session_id"]
 
-            # for f, bbox in bboxes.items():
-            #     video_predictor.handle_request(
-            #         request=dict(
-            #             type="add_prompt",
-            #             session_id=session_id,
-            #             frame_index=f,
-            #             bounding_boxes=bbox[0],
-            #             bounding_box_labels=bbox[1],
-            #         )
-            #     )
-
             outputs_per_frame_fwd = {}
             for n, fIdx in enumerate(frameIdxToTextPrompt_fwd):
                 video_predictor.handle_request(
@@ -461,7 +418,6 @@ In order to associate a point to a given submask, it must be colored with the su
                     )
                 )
                 outputs_per_frame_curr_fwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_fwd, "forward")
-                #logger.debug(f"{outputs_per_frame_curr_fwd.keys()}")
                 outputs_per_frame_fwd.update(outputs_per_frame_curr_fwd)
 
             logger.debug(f"Fwd keys: {outputs_per_frame_fwd.keys()}")
@@ -480,28 +436,8 @@ In order to associate a point to a given submask, it must be colored with the su
                         )
                     )
                     outputs_per_frame_curr_bwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_bwd, "backward")
-                    #logger.debug(f"{outputs_per_frame_curr_bwd.keys()}")
                     outputs_per_frame_bwd.update(outputs_per_frame_curr_bwd)
                 logger.debug(f"Bwd keys: {outputs_per_frame_bwd.keys()}")
-
-            #outputs_per_frame = {}
-
-            # for f, objects in clicks.items():
-            #     for obj_id, obj in objects.items():
-            #         video_predictor.handle_request(
-            #             request=dict(
-            #                 type="add_prompt",
-            #                 session_id=session_id,
-            #                 frame_index=f,
-            #                 points=torch.tensor(np.array(obj[0])),
-            #                 point_labels=torch.tensor(np.array(obj[1])),
-            #                 obj_id=obj_id
-            #             )
-            #         )
-
-                #outputs_per_frame = self.propagate_in_video(video_predictor, session_id, f, None)
-
-            #outputs_per_frame = self.propagate_in_video(video_predictor, session_id)
 
             outputs_per_frame_fwd = self.prepare_masks_for_visualization(outputs_per_frame_fwd)
             outputs_per_frame_bwd = self.prepare_masks_for_visualization(outputs_per_frame_bwd)
@@ -582,19 +518,14 @@ In order to associate a point to a given submask, it must be colored with the su
             torch.cuda.empty_cache()
 
 
-def get_image_paths_list(input_path, extension):
+def get_image_paths_list(input_path):
     from pyalicevision import sfmData
     from pyalicevision import sfmDataIO
     from pathlib import Path
-    import itertools
 
-    include_suffixes = [extension.lower(), extension.upper()]
     image_paths = []
 
-    if Path(input_path).is_dir():
-        image_paths = sorted(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-        image_paths = [(p, None, None) for p in image_paths]
-    elif Path(input_path).suffix.lower() in [".sfm", ".abc"]:
+    if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
         if Path(input_path).exists():
             dataAV = sfmData.SfMData()
             if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):

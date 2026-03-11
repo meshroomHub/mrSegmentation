@@ -1,34 +1,14 @@
-__version__ = "0.2"
+__version__ = "1.0"
 
 import os
 from pathlib import Path
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
-
-class ImageTagsExtractionNodeSize(desc.MultiDynamicNodeSize):
-    def computeSize(self, node):
-        if node.attribute(self._params[0]).isLink:
-            return node.attribute(self._params[0]).inputLink.node.size
-
-        from pathlib import Path
-
-        input_path_param = node.attribute(self._params[0])
-        extension_param = node.attribute(self._params[1])
-        input_path = input_path_param.value
-        extension = extension_param.value
-        include_suffixes = [extension.lower(), extension.upper()]
-
-        size = 1
-        if Path(input_path).is_dir():
-            import itertools
-            image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-            size = len(image_paths)
-        
-        return size
+from pyalicevision import parallelization as avpar
 
 class ImageTagsExtraction(desc.Node):
-    size = ImageTagsExtractionNodeSize(['input', 'extensionIn'])
+    size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
@@ -41,18 +21,8 @@ Generate a set of tags corresponding to recognized elements using a recognition 
         desc.File(
             name="input",
             label="Input",
-            description="Folder or SfMData file.",
+            description="SfMData file.",
             value="",
-        ),
-        desc.ChoiceParam(
-            name="extensionIn",
-            label="Input File Extension",
-            description="Input image file extension.\n"
-                        "Considered only if input is a folder.",
-            value="exr",
-            values=["exr", "png", "jpg"],
-            exclusive=True,
-            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
             name="recognitionModelPath",
@@ -77,8 +47,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
             name="keepFilename",
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
-            value=False,
-            enabled=lambda node: node.outputTaggedImage.value and not Path(node.input.value).is_dir(),
+            value=True,
         ),
         desc.ChoiceParam(
             name="extensionOut",
@@ -115,21 +84,13 @@ Generate a set of tags corresponding to recognized elements using a recognition 
         ),
     ]
 
-    def resolvedPaths(self, input_path, extensionIn, outDir, keepFilename, extensionOut):
+    def resolvedPaths(self, input_path, outDir, keepFilename, extensionOut):
         from pyalicevision import sfmData
         from pyalicevision import sfmDataIO
         from pathlib import Path
-        import itertools
 
-        include_suffixes = [extensionIn.lower(), extensionIn.upper()]
         paths = {}
-        if Path(input_path).is_dir():
-            input_filepaths = sorted(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-            for frameId, inputFile in enumerate(input_filepaths):
-                outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extensionOut)
-                outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
-                paths[str(inputFile)] = (outputFileMask, outputFileBoxes, frameId)
-        elif Path(input_path).suffix.lower() in [".sfm", ".abc"]:
+        if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
             if Path(input_path).exists():
                 dataAV = sfmData.SfMData()
                 if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL) and os.path.isdir(outDir):
@@ -164,7 +125,7 @@ Generate a set of tags corresponding to recognized elements using a recognition 
 
             chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
-            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.extensionIn.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extensionOut.value)
+            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extensionOut.value)
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)

@@ -1,4 +1,4 @@
-__version__ = "0.1"
+__version__ = "1.0"
 
 from chunk import Chunk
 import os
@@ -6,33 +6,13 @@ from pathlib import Path
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
+from pyalicevision import parallelization as avpar
 
 import logging
 logger = logging.getLogger("SDMatte")
 
-class SDMatteNodeSize(desc.MultiDynamicNodeSize):
-    def computeSize(self, node):
-        if node.attribute(self._params[0]).isLink:
-            return node.attribute(self._params[0]).inputLink.node.size
-
-        from pathlib import Path
-
-        input_path_param = node.attribute(self._params[0])
-        extension_param = node.attribute(self._params[1])
-        input_path = input_path_param.value
-        extension = extension_param.value
-        include_suffixes = [extension.lower(), extension.upper()]
-
-        size = 1
-        if Path(input_path).is_dir():
-            import itertools
-            image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-            size = len(image_paths)
-        
-        return size
-        
 class SDMatte(desc.Node):
-    size = SDMatteNodeSize(['input', 'extensionIn'])
+    size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
@@ -46,18 +26,8 @@ Only one type of driving prompt must be provided for a given image.
         desc.File(
             name="input",
             label="Input",
-            description="Folder or SfMData file.",
+            description="SfMData file.",
             value="",
-        ),
-        desc.ChoiceParam(
-            name="extensionIn",
-            label="Input File Extension",
-            description="Input image file extension.\n"
-                        "Considered only if input is a folder.",
-            value="exr",
-            values=["exr", "png", "jpg"],
-            exclusive=True,
-            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.File(
             name="inputMask",
@@ -106,8 +76,7 @@ Only one type of driving prompt must be provided for a given image.
             name="keepFilename",
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
-            value=False,
-            enabled=lambda node: not Path(node.input.value).is_dir(),
+            value=True,
         ),
         desc.ChoiceParam(
             name="extensionOut",
@@ -168,23 +137,14 @@ Only one type of driving prompt must be provided for a given image.
         ),
     ]
 
-    def resolvedPaths(self, pathIn, extIn, pathMask, extMask, outDir, keepFilename, extOut):
+    def resolvedPaths(self, pathIn, pathMask, extMask, outDir, keepFilename, extOut):
         from pyalicevision import sfmData
         from pyalicevision import sfmDataIO
         from pathlib import Path
-        import itertools
 
-        include_suffixes = [extIn.lower(), extIn.upper()]
         paths = {}
         inputFileMask = None
-        if Path(pathIn).is_dir():
-            input_filepaths = sorted(itertools.chain(*(Path(pathIn).glob(f'*.{suffix}') for suffix in include_suffixes)))
-            for frameId, inputFile in enumerate(input_filepaths):
-                if pathMask != "":
-                    inputFileMask = os.path.join(pathMask, Path(inputFile).stem + "." + extMask)
-                outputFileMatte = os.path.join(outDir, Path(inputFile).stem + "." + extOut)
-                paths[str(inputFile)] = (outputFileMatte, frameId, 'not_a_view', inputFileMask)
-        elif Path(pathIn).suffix.lower() in [".sfm", ".abc"]:
+        if Path(pathIn).suffix.lower() in [".sfm", ".abc"]:
             if Path(pathIn).exists():
                 dataAV = sfmData.SfMData()
                 if sfmDataIO.load(dataAV, pathIn, sfmDataIO.ALL) and os.path.isdir(outDir):
@@ -385,7 +345,7 @@ Only one type of driving prompt must be provided for a given image.
                 pathMask = chunk.node.inputTrimap.value
                 promptType = "trimap"
 
-            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.extensionIn.value,
+            outFiles = self.resolvedPaths(chunk.node.input.value,
                                           pathMask, chunk.node.extensionMask.value,
                                           chunk.node.output.value, chunk.node.keepFilename.value,
                                           chunk.node.extensionOut.value)
