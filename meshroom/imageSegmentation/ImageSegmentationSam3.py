@@ -308,9 +308,7 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3"
-            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ""
-            for textPrompt in textPrompts:
-                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] += textPrompt + ";"
+            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(textPrompts)
 
             detectedShapeBboxes = []
 

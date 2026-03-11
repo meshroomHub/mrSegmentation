@@ -432,9 +432,8 @@ from a text prompt.
 
                                 image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
 
-            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ""
-            for textPrompt in self.textPrompts:
-                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] += textPrompt + ";"
+            prompts = [textPrompt.strip() for textPrompt in self.textPrompts if textPrompt.strip()]
+            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(prompts)
 
             for frameId in range(frameNumber):
                 if chunk.node.maskInvert.value:
