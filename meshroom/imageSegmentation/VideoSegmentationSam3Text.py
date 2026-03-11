@@ -1,37 +1,17 @@
-__version__ = "0.1"
+__version__ = "1.0"
 
 import os
 from pathlib import Path
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
+from pyalicevision import parallelization as avpar
 
 import logging
 logger = logging.getLogger("VideoSegmentationSam3Text")
 
-class Sam3VideoNodeSize(desc.MultiDynamicNodeSize):
-    def computeSize(self, node):
-        if node.attribute(self._params[0]).isLink:
-            return node.attribute(self._params[0]).inputLink.node.size
-
-        from pathlib import Path
-
-        input_path_param = node.attribute(self._params[0])
-        extension_param = node.attribute(self._params[1])
-        input_path = input_path_param.value
-        extension = extension_param.value
-        include_suffixes = [extension.lower(), extension.upper()]
-
-        size = 1
-        if Path(input_path).is_dir():
-            import itertools
-            image_paths = list(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-            size = len(image_paths)
-        
-        return size
-        
 class VideoSegmentationSam3Text(desc.Node):
-    size = Sam3VideoNodeSize(['input', 'extensionIn'])
+    size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.EXTREME
 
     category = "Segmentation"
@@ -44,18 +24,8 @@ from a text prompt.
         desc.File(
             name="input",
             label="Input",
-            description="Folder or SfMData file.",
+            description="SfMData file.",
             value="",
-        ),
-        desc.ChoiceParam(
-            name="extensionIn",
-            label="Input File Extension",
-            description="Input image file extension.\n"
-                        "Considered only if input is a folder.",
-            value="exr",
-            values=["exr", "png", "jpg"],
-            exclusive=True,
-            enabled=lambda node: Path(node.input.value).is_dir(),
         ),
         desc.StringParam(
             name="prompt",
@@ -120,8 +90,7 @@ from a text prompt.
             name="keepFilename",
             label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
-            value=False,
-            enabled=lambda node: not Path(node.input.value).is_dir(),
+            value=True,
         ),
         desc.ChoiceParam(
             name="extensionOut",
@@ -192,9 +161,8 @@ from a text prompt.
 
     def preprocess(self, node):
         import re
-        extension = node.extensionIn.value
         input_path = node.input.value
-        image_paths = get_image_paths_list(input_path, extension)
+        image_paths = get_image_paths_list(input_path)
         if len(image_paths) == 0:
             raise FileNotFoundError(f'No image files found in {input_path}')
         self.image_paths = image_paths
@@ -493,19 +461,14 @@ from a text prompt.
             torch.cuda.empty_cache()
 
 
-def get_image_paths_list(input_path, extension):
+def get_image_paths_list(input_path):
     from pyalicevision import sfmData
     from pyalicevision import sfmDataIO
     from pathlib import Path
-    import itertools
 
-    include_suffixes = [extension.lower(), extension.upper()]
     image_paths = []
 
-    if Path(input_path).is_dir():
-        image_paths = sorted(itertools.chain(*(Path(input_path).glob(f'*.{suffix}') for suffix in include_suffixes)))
-        image_paths = [(p, None, None) for p in image_paths]
-    elif Path(input_path).suffix.lower() in [".sfm", ".abc"]:
+    if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
         if Path(input_path).exists():
             dataAV = sfmData.SfMData()
             if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):

@@ -4,14 +4,14 @@ import os
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
-
+from pyalicevision import parallelization as avpar
 
 class ImageBiRefNetMatting(desc.Node):
-    size = desc.DynamicNodeSize("input")
+    size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
-    category = "Utils"
+    category = "Matting"
     documentation = """
 Based on the BiRefNet model, the node generates a matte from a set of bounding boxes.
 
