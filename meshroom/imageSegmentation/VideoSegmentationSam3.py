@@ -317,6 +317,7 @@ In order to associate a point to a given submask, it must be colored with the su
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video"
+            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = chunk.node.prompt.value
 
             pil_images = []
             clicks = {}

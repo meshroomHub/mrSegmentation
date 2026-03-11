@@ -206,7 +206,7 @@ from a text prompt.
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
-            metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video"
+            metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video-TextPrompt"
 
             pil_images = []
             mask_images = []
@@ -257,6 +257,7 @@ from a text prompt.
                 logger.info(f"textPrompt: {textPrompt}")
                 boxes[textPrompt] = {"forward": {}, "backward": {}}
                 cryptoName = "object" if textPrompt == "" else textPrompt
+                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = textPrompt
 
                 video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
 
@@ -431,25 +432,29 @@ from a text prompt.
 
                                 image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
 
-                for frameId in range(frameNumber):
-                    if chunk.node.maskInvert.value:
-                        mask = (mask_images[frameId][:,:,0:1] == 0).astype('float32')
-                    else:
-                        mask = (mask_images[frameId][:,:,0:1] > 0).astype('float32')
-                    logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
+            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ""
+            for textPrompt in self.textPrompts:
+                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] += textPrompt + ";"
 
-                    if chunk.node.keepFilename.value:
-                        outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
-                    else:
-                        outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." + chunk.node.extensionOut.value)
+            for frameId in range(frameNumber):
+                if chunk.node.maskInvert.value:
+                    mask = (mask_images[frameId][:,:,0:1] == 0).astype('float32')
+                else:
+                    mask = (mask_images[frameId][:,:,0:1] > 0).astype('float32')
+                logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
 
-                    optWrite = avimg.ImageWriteOptions()
-                    optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                    if Path(outputFileMask).suffix.lower() == ".exr":
-                        optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
-                        optWrite.exrCompressionLevel(300)
+                if chunk.node.keepFilename.value:
+                    outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
+                else:
+                    outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." + chunk.node.extensionOut.value)
 
-                    image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                optWrite = avimg.ImageWriteOptions()
+                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                if Path(outputFileMask).suffix.lower() == ".exr":
+                    optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                    optWrite.exrCompressionLevel(300)
+
+                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
             jsonFilename = chunk.node.output.value + "/bboxes.json"
             with open(jsonFilename, "w", encoding="utf_8") as f:

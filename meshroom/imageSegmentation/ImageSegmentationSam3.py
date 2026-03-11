@@ -302,12 +302,15 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             posBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.positiveBoxes)
             negBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.negativeBoxes)
 
+            textPrompts = re.split(r'[\n]+', chunk.node.prompt.value)
+            textPrompts = [textPrompt for textPrompt in textPrompts if textPrompt]
+
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3"
-
-            textPrompts = re.split(r'[\n]+', chunk.node.prompt.value)
-            textPrompts = [textPrompt for textPrompt in textPrompts if textPrompt]
+            metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ""
+            for textPrompt in textPrompts:
+                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] += textPrompt + ";"
 
             detectedShapeBboxes = []
 
