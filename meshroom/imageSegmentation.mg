@@ -5,8 +5,8 @@
         "nodesVersions": {
             "CameraInit": "12.0",
             "CopyFiles": "1.3",
-            "ImageDetectionPrompt": "0.1",
-            "ImageSegmentationBox": "0.2"
+            "ImageDetectionPrompt": "1.0",
+            "ImageSegmentationBox": "1.0"
         },
         "template": true
     },
