@@ -302,7 +302,7 @@ from a text prompt.
                         sam3Utils.displayAt(outputs_per_frame_fwd, frameIdxToTextPrompt[n - 1], fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
 
                         mapping_fwd = sam3Utils.mapIds(outputs_per_frame[fIdx][fIdx], outputs_per_frame_fwd[frameIdxToTextPrompt[n - 1]][fIdx],
-                                                       sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+                                                       logger)
 
                         logger.debug(f"mapping fwd at key frame {fIdx}:\n{mapping_fwd}")
 
@@ -323,7 +323,7 @@ from a text prompt.
 
                             mapping_bwd = sam3Utils.mapIds(outputs_per_frame[fIdx][frameIdxToTextPrompt[n - 1]],
                                                            outputs_per_frame_bwd[frameIdxToTextPrompt[n - 1]][frameIdxToTextPrompt[n - 1]],
-                                                           sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+                                                           logger)
 
                             logger.debug(f"mapping bwd at key frame {frameIdxToTextPrompt[n - 1]}:\n{mapping_bwd}")
 
