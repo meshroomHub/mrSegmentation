@@ -351,7 +351,7 @@ from a text prompt.
                             crypto_id_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                             crypto_cov_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                             manifest_fwd = {}
-                        boxes[textPrompt]["forward"][frameId] = {}
+                        boxes[textPrompt]["forward"][firstFrameId + frameId] = {}
                         for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                             mask = maskBoxProb["mask"]
                             mask_images[frameId][mask] = [255, 255, 255]
@@ -366,7 +366,7 @@ from a text prompt.
                                 crypto_cov_fwd[mask] = 1.0
 
                             bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                            boxes[textPrompt]["forward"][frameId][key] = bbox
+                            boxes[textPrompt]["forward"][firstFrameId + frameId][key] = bbox
 
                         if chunk.node.outputColorMasks.value:
                             if chunk.node.keepFilename.value:
@@ -398,7 +398,7 @@ from a text prompt.
                                 crypto_id_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                                 crypto_cov_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                                 manifest_bwd = {}
-                            boxes[textPrompt]["backward"][frameId] = {}
+                            boxes[textPrompt]["backward"][firstFrameId + frameId] = {}
                             for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                                 mask = maskBoxProb["mask"]
                                 mask_images[frameId][mask] = [255, 255, 255]
@@ -411,7 +411,7 @@ from a text prompt.
                                     crypto_id_bwd[mask] = f32_hash
                                     crypto_cov_bwd[mask] = 1.0
                                 bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                                boxes[textPrompt]["backward"][frameId][key] = bbox
+                                boxes[textPrompt]["backward"][firstFrameId + frameId][key] = bbox
 
                             if chunk.node.outputColorMasks.value:
                                 if chunk.node.keepFilename.value:
