@@ -201,7 +201,7 @@ from a text prompt.
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            gpus_to_use = [torch.cuda.current_device()] if chunk.node.useGPU.value else None
+            gpus_to_use = [torch.cuda.current_device()] if chunk.node.useGpu.value else None
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
 
             metadata_deep_model = {}
