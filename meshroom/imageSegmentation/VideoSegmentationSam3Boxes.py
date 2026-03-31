@@ -1,6 +1,5 @@
 __version__ = "1.0"
 
-from functools import total_ordering
 import os
 from pathlib import Path
 
@@ -113,7 +112,6 @@ bounding boxes contained in a json file.
     ]
 
     def preprocess(self, node):
-        import re
         input_path = node.input.value
         image_paths = get_image_paths_list(input_path, node.inputx2.value, node.inputx4.value)
         if len(image_paths) == 0:
@@ -173,17 +171,18 @@ bounding boxes contained in a json file.
 
             for key, frame_chunks in bboxes.items():
 
-                textPrompt = key.split('_')[0]
-                obj_id = key.split('_')[1]
+                if "_" in key:
+                    textPrompt, obj_id = key.rsplit('_', 1)
+                else:
+                    textPrompt, obj_id = key, ""
                 logger.info(f"key = {key} ; text prompt = {textPrompt} ; obj_id = {obj_id}")
 
                 for frame_chunk in frame_chunks:
                     logger.info(frame_chunk)
                     pil_images = []
-                    mask_images = []
                     firstFrameId = frame_chunk.start_frame
                     for frame_idx, box in sorted(frame_chunk.boxes.items()):
-                        x1, y1, x2, y2 = box
+                        x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                         box_w = x2 - x1
                         box_h = y2 - y1
 
@@ -202,7 +201,6 @@ bounding boxes contained in a json file.
 
                         img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
                         pil_images.append(Image.fromarray((255.0*img_crop).astype("uint8")))
-                        mask_images.append(np.zeros_like(img_crop))
 
                     response = video_predictor.handle_request(
                         request=dict(

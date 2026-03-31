@@ -209,6 +209,8 @@ def extract_tracking(
         all_object_ids = set()
         for frame_data in forward.values():
             all_object_ids.update(frame_data.keys())
+        for frame_data in backward.values():
+            all_object_ids.update(frame_data.keys())
 
         for obj_id in sorted(all_object_ids, key=int):
             key = f"{label}_{obj_id}"

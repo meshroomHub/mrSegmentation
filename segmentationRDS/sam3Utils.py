@@ -86,6 +86,10 @@ def mapIds(outputs_per_frame_detected, outputs_per_frame_propagated, logger):
     masksRef = outputs_per_frame_propagated["out_binary_masks"]
     boxesRef = outputs_per_frame_propagated["out_boxes_xywh"]
 
+    if len(ids) == 0 or len(masks) == 0 or len(idsRef) == 0 or len(masksRef) == 0:
+        logger.debug("mapIds: No detected or propagated objects; return empty mapping.")
+        return {}
+
     hs, ws = masks[0].shape
 
     logger.debug(f"{len(ids)}")
