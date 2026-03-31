@@ -354,7 +354,7 @@ from a text prompt.
                         boxes[textPrompt]["forward"][firstFrameId + frameId] = {}
                         for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                             mask = maskBoxProb["mask"]
-                            mask_images[frameId][mask] = [255, 255, 255]
+                            mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
                             color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
                             colorMaskImageFwd[mask] = [x/255.0 for x in color]
 
@@ -401,7 +401,7 @@ from a text prompt.
                             boxes[textPrompt]["backward"][firstFrameId + frameId] = {}
                             for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                                 mask = maskBoxProb["mask"]
-                                mask_images[frameId][mask] = [255, 255, 255]
+                                mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
                                 color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
                                 colorMaskImageBwd[mask] = [x/255.0 for x in color]
                                 if chunk.node.outputCryptomatte.value:
