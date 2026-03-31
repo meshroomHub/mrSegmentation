@@ -161,7 +161,7 @@ bounding boxes contained in a json file.
             x4_ok = os.path.exists(chunk.node.inputx4.value)
             bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, x2_ok, x4_ok, par)
 
-            logger.info(f"bboxes.keys() = {bboxes.keys()}")
+            logger.debug(f"bboxes.keys() = {bboxes.keys()}")
 
             full_mask_images = {}
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
