@@ -275,6 +275,7 @@ def get_image_paths_list(input_path, path_folder_x2 = "", path_folder_x4 = ""):
             dataAV = sfmData.SfMData()
             if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):
                 views = dataAV.getViews()
+                commonParams = None
                 for id, v in views.items():
                     image_x1_path = Path(v.getImage().getImagePath())
                     image_x1_name = image_x1_path.name
@@ -289,6 +290,10 @@ def get_image_paths_list(input_path, path_folder_x2 = "", path_folder_x4 = ""):
                     par = 1.0
                     if pinhole is not None:
                         par = pinhole.getPixelAspectRatio()
+                    if commonParams is None:
+                        commonParams = [v.getImage().getWidth(), v.getImage().getHeight(), par, image_x2_path is None, image_x4_path is None]
+                    if commonParams != [v.getImage().getWidth(), v.getImage().getHeight(), par, image_x2_path is None, image_x4_path is None]:
+                        raise ValueError("All images do not have same dimensions or one image is missing its upscaled version.")
                     image_paths.append((image_x1_path, str(id), v.getFrameId(), v.getImage().getWidth(),
                                         v.getImage().getHeight(), par, image_x2_path, image_x4_path))
 
