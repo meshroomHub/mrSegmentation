@@ -63,7 +63,7 @@ def compute_iou(box1: list, box2: list) -> float:
 
 def merge_boxes(box1: list, box2: list, iou_threshold: float = 0.5) -> tuple[list, str]:
     """
-    Merge 2 boxes xyxy by taking the bounding boxe, if their IoU is higher than the threshold. 
+    Merge 2 boxes xyxy by taking the bounding box, if their IoU is higher than the threshold. 
     Else return the first box.
     """
     iou = compute_iou(box1, box2)
@@ -77,7 +77,7 @@ def merge_boxes(box1: list, box2: list, iou_threshold: float = 0.5) -> tuple[lis
         ]
         return merged, f"bounding (IoU={iou:.2f})"
     else:
-        return box1, f"forward     (IoU={iou:.2f} < seuil={iou_threshold})"
+        return box1, f"forward     (IoU={iou:.2f} < threshold={iou_threshold})"
 
 
 def get_target_size(boxes: dict, par: float):
@@ -138,7 +138,7 @@ def expand_box(box: list, target_size: int, par: float, frame_w: int, frame_h: i
 
     expanded_display = [int(new_x1), int(new_y1), int(new_x2), int(new_y2)]
 
-    # 3. Back conversion to source space
+    # Back conversion to source space
     return box_to_source(expanded_display, par)
 
 
@@ -184,7 +184,7 @@ def extract_tracking(
 ) -> dict:
     """
     Extract bounding boxes per object and organize them in chunck of consecutive frames.
-    Coordinates in the json file are supposed to be in the original source space, with the pixel aspect ratio not applicated.
+    Coordinates in the json file are supposed to be in the original source space, with the pixel aspect ratio not applied.
     The pixel aspect ratio is applied by reducing the raw number to deliver coordinates in the display space.
     When possible, all delivered bounding boxes for a given object are sized as 252x252, 504x504 or 1008x1008,
     to match with sam3 optimal model input.

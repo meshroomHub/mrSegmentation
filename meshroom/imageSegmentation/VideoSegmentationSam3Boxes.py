@@ -30,13 +30,13 @@ bounding boxes contained in a json file.
         desc.File(
             name="inputx2",
             label="Inputx2",
-            description="Folder containing source images upscale by 2.",
+            description="Folder containing source images upscaled by 2.",
             value="",
         ),
         desc.File(
             name="inputx4",
             label="Inputx4",
-            description="Folder containing source images upscale by 4.",
+            description="Folder containing source images upscaled by 4.",
             value="",
         ),
         desc.File(
@@ -299,5 +299,5 @@ def get_image_paths_list(input_path, path_folder_x2 = "", path_folder_x4 = ""):
 
             image_paths.sort(key=lambda x: x[0])
     else:
-        raise ValueError(f"Input path '{input_path}' is not a valid path (folder or sfmData file).")
+        raise ValueError(f"Input path '{input_path}' is not a valid sfmData file.")
     return image_paths
