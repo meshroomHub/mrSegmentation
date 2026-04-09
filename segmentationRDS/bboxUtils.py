@@ -1,7 +1,7 @@
 import json
 from dataclasses import dataclass, field
 
-THRESHOLDS = [252, 504, 1008]
+SIZE_THRESHOLDS = [252, 504, 1008]
 
 @dataclass
 class TrackChunk:
@@ -93,7 +93,7 @@ def get_target_size(boxes: dict, par: float):
         h = y2 - y1
         max_size = max(max_size, w, h)
 
-    for threshold in THRESHOLDS:
+    for threshold in SIZE_THRESHOLDS :
         if max_size < threshold:
             return threshold
 
@@ -244,10 +244,10 @@ def extract_tracking(
             expanded_boxes = {}
             for frame_idx, box in raw_boxes.items():
                 if target_size is not None:
-                    if target_size < 504 and not x4_ok:
-                        target_size = 504
-                    if target_size < 1008 and not x2_ok:
-                        target_size = 1008
+                    if target_size < SIZE_THRESHOLDS[1] and not x4_ok:
+                        target_size = SIZE_THRESHOLDS[1]
+                    if target_size < SIZE_THRESHOLDS[2] and not x2_ok:
+                        target_size = SIZE_THRESHOLDS[2]
                     expanded = expand_box(box, target_size, par, frame_w, frame_h)
                     expanded_boxes[frame_idx] = expanded
                 else:
