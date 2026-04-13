@@ -76,7 +76,7 @@ def displayAt(outputs_per_frame, keyFrameIdx, frameId, imgWidth, imageHeight, lo
         prob = outputs_per_frame[keyFrameIdx][frameId]["out_probs"][i]
         logger.debug(f"{obj_ids}: {box} ; {prob}")
 
-def mapIds(outputs_per_frame_detected, outputs_per_frame_propagated, w, h, logger):
+def mapIds(outputs_per_frame_detected, outputs_per_frame_propagated, logger):
     import numpy as np
 
     ids = outputs_per_frame_detected["out_obj_ids"]
@@ -85,6 +85,12 @@ def mapIds(outputs_per_frame_detected, outputs_per_frame_propagated, w, h, logge
     idsRef = outputs_per_frame_propagated["out_obj_ids"]
     masksRef = outputs_per_frame_propagated["out_binary_masks"]
     boxesRef = outputs_per_frame_propagated["out_boxes_xywh"]
+
+    if len(ids) == 0 or len(masks) == 0 or len(idsRef) == 0 or len(masksRef) == 0:
+        logger.debug("mapIds: No detected or propagated objects; return empty mapping.")
+        return {}
+
+    hs, ws = masks[0].shape
 
     logger.debug(f"{len(ids)}")
     logger.debug(f"{ids}")
@@ -101,10 +107,10 @@ def mapIds(outputs_per_frame_detected, outputs_per_frame_propagated, w, h, logge
             logger.debug(f"{id_det} vs {id_prop}: ios = {inter_over_smallest} ({ios_best})")
             if  inter_over_smallest > 0.9:
                 x1, y1, x2, y2 = box_inter
-                x1 = int(x1 * w)
-                y1 = int(y1 * h)
-                x2 = int(x2 * w)
-                y2 = int(y2 * h)
+                x1 = int(x1 * ws)
+                y1 = int(y1 * hs)
+                x2 = int(x2 * ws)
+                y2 = int(y2 * hs)
                 crop = masks[d][y1:y2, x1:x2]
                 cropRef = masksRef[p][y1:y2, x1:x2]
                 inter = np.logical_and(crop,cropRef).sum()

@@ -201,7 +201,7 @@ from a text prompt.
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            gpus_to_use = [torch.cuda.current_device()]
+            gpus_to_use = [torch.cuda.current_device()] if chunk.node.useGpu.value else None
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
 
             metadata_deep_model = {}
@@ -302,7 +302,7 @@ from a text prompt.
                         sam3Utils.displayAt(outputs_per_frame_fwd, frameIdxToTextPrompt[n - 1], fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
 
                         mapping_fwd = sam3Utils.mapIds(outputs_per_frame[fIdx][fIdx], outputs_per_frame_fwd[frameIdxToTextPrompt[n - 1]][fIdx],
-                                                       sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+                                                       logger)
 
                         logger.debug(f"mapping fwd at key frame {fIdx}:\n{mapping_fwd}")
 
@@ -323,7 +323,7 @@ from a text prompt.
 
                             mapping_bwd = sam3Utils.mapIds(outputs_per_frame[fIdx][frameIdxToTextPrompt[n - 1]],
                                                            outputs_per_frame_bwd[frameIdxToTextPrompt[n - 1]][frameIdxToTextPrompt[n - 1]],
-                                                           sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
+                                                           logger)
 
                             logger.debug(f"mapping bwd at key frame {frameIdxToTextPrompt[n - 1]}:\n{mapping_bwd}")
 
@@ -340,7 +340,7 @@ from a text prompt.
                     logger.debug(f"Keys: {outputs_per_frame_fwd[fIdx].keys()}")
 
                     # write Fwd from fIdx to frameIdxToTextPrompt[n + 1]
-                    lastFIdxFwd = frameIdxToTextPrompt[n + 1] if n < len(frameIdxToTextPrompt) - 1 else fIdx + 1
+                    lastFIdxFwd = frameIdxToTextPrompt[n + 1] if n < len(frameIdxToTextPrompt) - 1 else frameNumber
                     outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame_fwd[fIdx])
 
                     logger.debug(f"Extract boxes for frame Fwd from : {fIdx} to {lastFIdxFwd - 1}")
@@ -351,10 +351,10 @@ from a text prompt.
                             crypto_id_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                             crypto_cov_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                             manifest_fwd = {}
-                        boxes[textPrompt]["forward"][frameId] = {}
+                        boxes[textPrompt]["forward"][firstFrameId + frameId] = {}
                         for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                             mask = maskBoxProb["mask"]
-                            mask_images[frameId][mask] = [255, 255, 255]
+                            mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
                             color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
                             colorMaskImageFwd[mask] = [x/255.0 for x in color]
 
@@ -366,7 +366,7 @@ from a text prompt.
                                 crypto_cov_fwd[mask] = 1.0
 
                             bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                            boxes[textPrompt]["forward"][frameId][key] = bbox
+                            boxes[textPrompt]["forward"][firstFrameId + frameId][key] = bbox
 
                         if chunk.node.outputColorMasks.value:
                             if chunk.node.keepFilename.value:
@@ -398,10 +398,10 @@ from a text prompt.
                                 crypto_id_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                                 crypto_cov_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                                 manifest_bwd = {}
-                            boxes[textPrompt]["backward"][frameId] = {}
+                            boxes[textPrompt]["backward"][firstFrameId + frameId] = {}
                             for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                                 mask = maskBoxProb["mask"]
-                                mask_images[frameId][mask] = [255, 255, 255]
+                                mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
                                 color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
                                 colorMaskImageBwd[mask] = [x/255.0 for x in color]
                                 if chunk.node.outputCryptomatte.value:
@@ -411,7 +411,7 @@ from a text prompt.
                                     crypto_id_bwd[mask] = f32_hash
                                     crypto_cov_bwd[mask] = 1.0
                                 bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                                boxes[textPrompt]["backward"][frameId][key] = bbox
+                                boxes[textPrompt]["backward"][firstFrameId + frameId][key] = bbox
 
                             if chunk.node.outputColorMasks.value:
                                 if chunk.node.keepFilename.value:
