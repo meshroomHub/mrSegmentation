@@ -340,7 +340,7 @@ from a text prompt.
                     logger.debug(f"Keys: {outputs_per_frame_fwd[fIdx].keys()}")
 
                     # write Fwd from fIdx to frameIdxToTextPrompt[n + 1]
-                    lastFIdxFwd = frameIdxToTextPrompt[n + 1] if n < len(frameIdxToTextPrompt) - 1 else fIdx + 1
+                    lastFIdxFwd = frameIdxToTextPrompt[n + 1] if n < len(frameIdxToTextPrompt) - 1 else frameNumber
                     outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame_fwd[fIdx])
 
                     logger.debug(f"Extract boxes for frame Fwd from : {fIdx} to {lastFIdxFwd - 1}")
