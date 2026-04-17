@@ -1,3 +1,4 @@
+from chunk import Chunk
 import json
 from dataclasses import dataclass, field
 
@@ -80,7 +81,7 @@ def merge_boxes(box1: list, box2: list, iou_threshold: float = 0.5) -> tuple[lis
         return box1, f"forward     (IoU={iou:.2f} < threshold={iou_threshold})"
 
 
-def get_target_size(boxes: dict, par: float):
+def get_target_size(boxes: dict, par: float, roundSize: bool = True):
     """
     Compute the target size for a set of boxes.
     Comparisons occur in the display space (with pixel aspect ratio applied)).
@@ -93,9 +94,10 @@ def get_target_size(boxes: dict, par: float):
         h = y2 - y1
         max_size = max(max_size, w, h)
 
-    for threshold in SIZE_THRESHOLDS :
-        if max_size < threshold:
-            return threshold
+    if roundSize:
+        for threshold in SIZE_THRESHOLDS :
+            if max_size < threshold:
+                return threshold
 
     return max_size
 
@@ -179,6 +181,7 @@ def extract_tracking(
     frame_h       : int,
     x2_ok         : bool = True,
     x4_ok         : bool = True,
+    roundCrop     : bool = True,
     par           : float = 1.0,
     iou_threshold : float = 0.5
 ) -> dict:
@@ -238,15 +241,15 @@ def extract_tracking(
                 raw_boxes[int(frame_idx)] = box
 
             # --- compute target size ---
-            target_size = get_target_size(raw_boxes, par)
+            target_size = get_target_size(raw_boxes, par, roundCrop)
 
             # --- Expand boxes in display space ---
             expanded_boxes = {}
             for frame_idx, box in raw_boxes.items():
                 if target_size is not None:
-                    if target_size < SIZE_THRESHOLDS[1] and not x4_ok:
+                    if target_size < SIZE_THRESHOLDS[1] and not x4_ok and roundCrop:
                         target_size = SIZE_THRESHOLDS[1]
-                    if target_size < SIZE_THRESHOLDS[2] and not x2_ok:
+                    if target_size < SIZE_THRESHOLDS[2] and not x2_ok and roundCrop:
                         target_size = SIZE_THRESHOLDS[2]
                     expanded = expand_box(box, target_size, par, frame_w, frame_h)
                     expanded_boxes[frame_idx] = expanded
@@ -259,5 +262,71 @@ def extract_tracking(
             result[key] = chunks
 
     return result
+
+
+def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: float, logger) -> list[TrackChunk]:
+    """
+    Tile a chunk of consecutive frames by creating a set of chunks.
+    One chunk on the same consecutive frames for every tiles.
+    """
+    box = chunk.boxes[chunk.start_frame]
+    x1, y1, x2, y2 = box_to_display(box, par)
+    box_w = x2 - x1
+    box_h = y2 - y1
+
+    logger.info(f"Boxes size {box_w}x{box_h}")
+
+    tile_nb_w = (box_w // targetTileSize) + 1
+    tile_nb_h = (box_h // targetTileSize) + 1
+    tile_size_w = min(targetTileSize, box_w)
+    tile_size_h = min(targetTileSize, box_h)
+    overlap_w = 0
+    overlap_h = 0
+    start_cols = [0]
+    start_rows = [0]
+
+    if tile_nb_w > 1:
+        overlap_w = ((tile_nb_w * tile_size_w) - box_w) // (tile_nb_w - 1)
+        if overlap_w < min_overlap:
+            tile_nb_w = tile_nb_w + 1
+            new_overlap_w = ((tile_nb_w * tile_size_w) - box_w) // (tile_nb_w - 1)
+            if new_overlap_w <= box_w // 2:
+                overlap_w = new_overlap_w
+        k = tile_size_w - overlap_w
+        while k <= box_w - tile_size_w:
+            start_cols.append(k)
+            k = k + tile_size_w - overlap_w
+        if start_cols[len(start_cols)- 1] != box_w - tile_size_w:
+            start_cols.append(box_w - tile_size_w)
+
+    if tile_nb_h > 1:
+        overlap_h = ((tile_nb_h * tile_size_h) - box_h) // (tile_nb_h - 1)
+        if overlap_h < min_overlap:
+            tile_nb_h = tile_nb_h + 1
+            new_overlap_h = ((tile_nb_h * tile_size_h) - box_h) // (tile_nb_h - 1)
+            if new_overlap_h <= box_h // 2:
+                overlap_h = new_overlap_h
+        k = tile_size_h - overlap_h
+        while k <= box_h - tile_size_h and box_h > tile_size_h:
+            start_rows.append(k)
+            k = k + tile_size_h - overlap_h
+        if start_rows[len(start_rows)- 1] != box_h - tile_size_h:
+            start_rows.append(box_h - tile_size_h)
+
+    logger.info(f"Chunk tiling in {len(start_cols)}x{len(start_rows)}")
+    logger.info(f"tile size: {tile_size_w}x{tile_size_h}")
+    logger.info(f"min overlaps: {overlap_w}x{overlap_h}")
+
+    chunk_tiles = []
+    for r in start_rows:
+        for c in start_cols:
+            chunk_tile = TrackChunk(start_frame = chunk.start_frame, end_frame = chunk.end_frame, boxes = {})
+            for frame_id, box in chunk.boxes.items():
+                x1, y1, x2, y2 = box
+                tile = [x1 + c, y1 + r, x1 + c + tile_size_w, y1 + r + tile_size_h]
+                chunk_tile.boxes[frame_id] = tile
+            chunk_tiles.append(chunk_tile)
+
+    return chunk_tiles
 
 
