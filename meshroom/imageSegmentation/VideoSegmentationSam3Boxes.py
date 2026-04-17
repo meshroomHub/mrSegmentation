@@ -63,13 +63,13 @@ For each tracked object (identified by a text prompt and an object ID):
         ),
         desc.File(
             name="inputx2",
-            label="Inputx2",
+            label="Input x2",
             description="Folder containing source images upscaled by 2.",
             value="",
         ),
         desc.File(
             name="inputx4",
-            label="Inputx4",
+            label="Input x4",
             description="Folder containing source images upscaled by 4.",
             value="",
         ),
@@ -101,7 +101,7 @@ For each tracked object (identified by a text prompt and an object ID):
         desc.IntParam(
             name="minimalOverlap",
             label="Minimal Overlap",
-            description="minimal tile overlap.",
+            description="Minimal tile overlap.",
             value=16,
             enabled=lambda node: node.enableTiling.value,
         ),
