@@ -1,4 +1,3 @@
-from chunk import Chunk
 import json
 from dataclasses import dataclass, field
 
@@ -285,7 +284,7 @@ def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: fl
     start_cols = [0]
     start_rows = [0]
 
-    if tile_nb_w > 1:
+    if tile_nb_w > 1 and tile_size_w < box_w:
         overlap_w = ((tile_nb_w * tile_size_w) - box_w) // (tile_nb_w - 1)
         if overlap_w < min_overlap:
             tile_nb_w = tile_nb_w + 1
@@ -299,7 +298,7 @@ def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: fl
         if start_cols[len(start_cols)- 1] != box_w - tile_size_w:
             start_cols.append(box_w - tile_size_w)
 
-    if tile_nb_h > 1:
+    if tile_nb_h > 1 and tile_size_h < box_h:
         overlap_h = ((tile_nb_h * tile_size_h) - box_h) // (tile_nb_h - 1)
         if overlap_h < min_overlap:
             tile_nb_h = tile_nb_h + 1
@@ -322,9 +321,9 @@ def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: fl
         for c in start_cols:
             chunk_tile = TrackChunk(start_frame = chunk.start_frame, end_frame = chunk.end_frame, boxes = {})
             for frame_id, box in chunk.boxes.items():
-                x1, y1, x2, y2 = box
-                tile = [x1 + c, y1 + r, x1 + c + tile_size_w, y1 + r + tile_size_h]
-                chunk_tile.boxes[frame_id] = tile
+                x1, y1, x2, y2 = box_to_display(box, par)
+                tile_display = [x1 + c, y1 + r, x1 + c + tile_size_w, y1 + r + tile_size_h]
+                chunk_tile.boxes[frame_id] = box_to_source(tile_display, par)
             chunk_tiles.append(chunk_tile)
 
     return chunk_tiles

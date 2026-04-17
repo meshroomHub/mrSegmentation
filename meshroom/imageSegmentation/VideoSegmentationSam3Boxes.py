@@ -241,7 +241,7 @@ For each tracked object (identified by a text prompt and an object ID):
                 logger.info(f"key = {key} ; text prompt = {textPrompt} ; obj_id = {obj_id}")
 
                 for frame_chunk in frame_chunks:
-                    logger.info(f"frame_chunk:\{frame_chunk}")
+                    logger.info(f"frame_chunk:\n{frame_chunk}")
                     logger.debug(f"{frame_chunk.boxes}")
 
                     chunk_tiles = [frame_chunk]
@@ -255,7 +255,7 @@ For each tracked object (identified by a text prompt and an object ID):
                             img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
                             full_pil_images[frameId] = img
 
-                    logger.info(f"chunk_tiles:\{chunk_tiles}")
+                    logger.info(f"chunk_tiles:\n{chunk_tiles}")
 
                     for chunk_tile in chunk_tiles:
                         logger.debug(f"{chunk_tile.boxes}")
