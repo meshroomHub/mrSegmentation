@@ -34,7 +34,6 @@ RUN python -m venv ${MRPLUGIN_BUNDLE}
 WORKDIR ${MRPLUGIN_BUNDLE}
 
 RUN ${MRPLUGIN_BUNDLE}/bin/pip install -r ${MRPLUGIN_DEV}/requirements.txt
-RUN sed -i -e 's/cu124/cu121/g' ${MRPLUGIN_DEV}/torch-requirements.txt
 RUN ${MRPLUGIN_BUNDLE}/bin/pip install -r ${MRPLUGIN_DEV}/torch-requirements.txt --upgrade --force-reinstall
 
 

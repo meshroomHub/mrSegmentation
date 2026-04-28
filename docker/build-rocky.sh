@@ -2,7 +2,7 @@
 set -ex
 
 test -z "$MRSEGMENTATION_VERSION" && MRSEGMENTATION_VERSION="$(git rev-parse --abbrev-ref HEAD)-$(git rev-parse --short HEAD)"
-test -z "$CUDA_VERSION" && CUDA_VERSION=12.1.1
+test -z "$CUDA_VERSION" && CUDA_VERSION=12.8.1
 test -z "$ROCKY_VERSION" && ROCKY_VERSION=9
 
 test -d docker || (
