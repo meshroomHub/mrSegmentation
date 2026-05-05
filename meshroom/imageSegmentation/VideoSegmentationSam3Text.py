@@ -464,12 +464,13 @@ from a text prompt.
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
 
+                frame_metadata_deep_model = dict(metadata_deep_model)
                 for prompt in self.textPrompts:
                     for direction in ["forward", "backward"]:
                         for k, box in metadata_boxes[frameId][prompt][direction].items():
-                            metadata_deep_model["Meshroom:mrSegmentation:"+k] = box
+                            frame_metadata_deep_model["Meshroom:mrSegmentation:"+k] = box
 
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
 
             jsonFilename = chunk.node.output.value + "/bboxes.json"
             with open(jsonFilename, "w", encoding="utf_8") as f:

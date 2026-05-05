@@ -356,12 +356,13 @@ For each tracked object (identified by a text prompt and an object ID):
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
 
+                frame_metadata_deep_model = dict(metadata_deep_model)
                 for prompt, bboxes in metadata_boxes[firstFrameId + frameId].items():
                     for k, box in metadata_boxes[firstFrameId + frameId][prompt].items():
-                            metadata_deep_model["Meshroom:mrSegmentation:"+k] = box
+                            frame_metadata_deep_model["Meshroom:mrSegmentation:"+k] = box
 
                 image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
-                                 sourceInfo["PAR"], metadata_deep_model, optWrite)
+                                 sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
 
         finally:
             torch.cuda.empty_cache()
