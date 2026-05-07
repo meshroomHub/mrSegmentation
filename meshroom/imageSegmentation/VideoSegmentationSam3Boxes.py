@@ -223,6 +223,10 @@ For each tracked object (identified by a text prompt and an object ID):
             x4_ok = os.path.exists(chunk.node.inputx4.value)
             roundCrop = chunk.node.roundCropSize.value
             bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, x2_ok, x4_ok, roundCrop, par)
+            bboxes_metadata = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, roundCrop, par)
+            metadata_boxes = {}
+            for frameId in range(len(chunk_image_paths)):
+                metadata_boxes[firstFrameId + frameId] = {}
 
             logger.debug(f"bboxes.keys() = {bboxes.keys()}")
 
@@ -321,6 +325,19 @@ For each tracked object (identified by a text prompt and an object ID):
 
                         video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
 
+            for key, frame_chunks in bboxes_metadata.items():
+                if "_" in key:
+                    textPrompt, obj_id = key.rsplit('_', 1)
+                else:
+                    textPrompt, obj_id = key, ""
+                for frame_chunk in frame_chunks:
+                    for frame_idx, box in sorted(frame_chunk.boxes.items()):
+                        if textPrompt not in metadata_boxes[frame_idx]:
+                            metadata_boxes[frame_idx][textPrompt] = {}
+                        x1, y1, x2, y2 = box
+                        bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
+                        metadata_boxes[frame_idx][textPrompt][textPrompt + "_" + str(obj_id)] = bbox_str
+
             for frameId, image_path in enumerate(chunk_image_paths):
                 if chunk.node.maskInvert.value:
                     mask = (full_mask_images[image_path[2]][:,:,0:1] == 0).astype('float32')
@@ -339,8 +356,13 @@ For each tracked object (identified by a text prompt and an object ID):
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
 
+                frame_metadata_deep_model = dict(metadata_deep_model)
+                for prompt, bboxes in metadata_boxes[firstFrameId + frameId].items():
+                    for k, box in metadata_boxes[firstFrameId + frameId][prompt].items():
+                            frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
+
                 image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
-                                 sourceInfo["PAR"], metadata_deep_model, optWrite)
+                                 sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
 
         finally:
             torch.cuda.empty_cache()

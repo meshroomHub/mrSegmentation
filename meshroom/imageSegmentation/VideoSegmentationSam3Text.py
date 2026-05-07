@@ -251,6 +251,9 @@ from a text prompt.
             session_id = response["session_id"]
 
             boxes = {}
+            metadata_boxes = {}
+            for frameId in range(frameNumber):
+                metadata_boxes[frameId] = {}
 
             for textPrompt in self.textPrompts:
 
@@ -258,6 +261,8 @@ from a text prompt.
                 boxes[textPrompt] = {"forward": {}, "backward": {}}
                 cryptoName = "object" if textPrompt == "" else textPrompt
                 metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = textPrompt
+                for frameId in range(frameNumber):
+                    metadata_boxes[frameId][textPrompt] = {"forward": {}, "backward": {}}
 
                 video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
 
@@ -367,6 +372,9 @@ from a text prompt.
 
                             bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
                             boxes[textPrompt]["forward"][firstFrameId + frameId][key] = bbox
+                            x1, y1, x2, y2 = bbox
+                            bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
+                            metadata_boxes[frameId][textPrompt]["forward"]["fwd_" + textPrompt + "_" + str(key)] = bbox_str
 
                         if chunk.node.outputColorMasks.value:
                             if chunk.node.keepFilename.value:
@@ -412,6 +420,9 @@ from a text prompt.
                                     crypto_cov_bwd[mask] = 1.0
                                 bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
                                 boxes[textPrompt]["backward"][firstFrameId + frameId][key] = bbox
+                                x1,y1,x2,y2 = bbox
+                                bbox_str = str(x1)+";"+str(y1)+";"+str(x2)+";"+str(y2)
+                                metadata_boxes[frameId][textPrompt]["backward"]["bwd_"+textPrompt+"_"+str(key)] = bbox_str
 
                             if chunk.node.outputColorMasks.value:
                                 if chunk.node.keepFilename.value:
@@ -453,7 +464,13 @@ from a text prompt.
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
 
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                frame_metadata_deep_model = dict(metadata_deep_model)
+                for prompt in self.textPrompts:
+                    for direction in ["forward", "backward"]:
+                        for k, box in metadata_boxes[frameId][prompt][direction].items():
+                            frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
+
+                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
 
             jsonFilename = chunk.node.output.value + "/bboxes.json"
             with open(jsonFilename, "w", encoding="utf_8") as f:
