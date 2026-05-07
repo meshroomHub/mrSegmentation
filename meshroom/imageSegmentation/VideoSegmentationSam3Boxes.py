@@ -335,8 +335,8 @@ For each tracked object (identified by a text prompt and an object ID):
                         if textPrompt not in metadata_boxes[frame_idx]:
                             metadata_boxes[frame_idx][textPrompt] = {}
                         x1, y1, x2, y2 = box
-                        bbox_str = str(x1)+";"+str(y1)+";"+str(x2)+";"+str(y2)
-                        metadata_boxes[frame_idx][textPrompt][textPrompt+"_"+str(obj_id)] = bbox_str
+                        bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
+                        metadata_boxes[frame_idx][textPrompt][textPrompt + "_" + str(obj_id)] = bbox_str
 
             for frameId, image_path in enumerate(chunk_image_paths):
                 if chunk.node.maskInvert.value:
@@ -359,7 +359,7 @@ For each tracked object (identified by a text prompt and an object ID):
                 frame_metadata_deep_model = dict(metadata_deep_model)
                 for prompt, bboxes in metadata_boxes[firstFrameId + frameId].items():
                     for k, box in metadata_boxes[firstFrameId + frameId][prompt].items():
-                            frame_metadata_deep_model["Meshroom:mrSegmentation:"+k] = box
+                            frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
 
                 image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
                                  sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
