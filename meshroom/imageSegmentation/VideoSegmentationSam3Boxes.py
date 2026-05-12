@@ -12,7 +12,7 @@ logger = logging.getLogger("VideoSegmentationSam3Boxes")
 
 class VideoSegmentationSam3Boxes(desc.Node):
     size = avpar.DynamicViewsSize("input")
-    gpu = desc.Level.EXTREME
+    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
 
     category = "Segmentation"
     documentation = """
@@ -125,9 +125,9 @@ For each tracked object (identified by a text prompt and an object ID):
             value=False,
         ),
         desc.BoolParam(
-            name="useGpu",
-            label="Use GPU",
-            description="Use GPU for computation if available.",
+            name="useOnlyHighPowerGpu",
+            label="Use Only High Power GPU",
+            description="Set GPU power requirement.",
             value=True,
             invalidate=False,
         ),
@@ -206,7 +206,7 @@ For each tracked object (identified by a text prompt and an object ID):
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            gpus_to_use = [torch.cuda.current_device()] if chunk.node.useGpu.value else None
+            gpus_to_use = [torch.cuda.current_device()]
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
 
             metadata_deep_model = {}
