@@ -105,6 +105,13 @@ For each tracked object (identified by a text prompt and an object ID):
             value=16,
             enabled=lambda node: node.enableTiling.value,
         ),
+        desc.IntParam(
+            name="maximalNumberOfTilesPerDimension",
+            label="Maximal Number Of Tiles Per Dimension",
+            description="Maximal number of tiles for width end height.",
+            value=2,
+            enabled=lambda node: node.enableTiling.value,
+        ),
         desc.BoolParam(
             name="roundCropSize",
             label="Round Crop Size",
@@ -251,18 +258,33 @@ For each tracked object (identified by a text prompt and an object ID):
                     chunk_tiles = [frame_chunk]
                     if chunk.node.enableTiling.value:
                         chunk_tiles = bboxUtils.tile_chunk(frame_chunk, chunk.node.targetTileSize.value,
-                                                           chunk.node.minimalOverlap.value, sourceInfo["PAR"], logger)
+                                                           chunk.node.minimalOverlap.value,
+                                                           chunk.node.maximalNumberOfTilesPerDimension.value, sourceInfo["PAR"], logger)
+
                     # In tiling mode, avoid loading all frames for every new tiles
                     full_pil_images = {}
+                    full_rough_mask_images = {}
                     if chunk.node.enableTiling.value:
                         for frameId, _ in chunk_tiles[0].boxes.items():
                             img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
                             full_pil_images[frameId] = img
+                            rough_mask_image_path = os.path.join(chunk.node.bboxesFolder.value, Path(chunk_image_paths[frameId - firstFrameId][0]).stem)
+                            if os.path.exists(Path(str(rough_mask_image_path) + ".exr")):
+                                rough_mask_image_path = Path(str(rough_mask_image_path) + ".exr")
+                            elif os.path.exists(Path(str(rough_mask_image_path) + ".png")):
+                                rough_mask_image_path = Path(str(rough_mask_image_path) + ".png")
+                            elif os.path.exists(Path(str(rough_mask_image_path) + ".jpg")):
+                                rough_mask_image_path = Path(str(rough_mask_image_path) + ".jpg")
+                            if os.path.isfile(rough_mask_image_path):
+                                rough_mask, h_ori, w_ori, PAR, orientation = image.loadImage(str(rough_mask_image_path), True)
+                                full_rough_mask_images[frameId] = rough_mask
+                        if not full_rough_mask_images:
+                            logger.info("No rough masks loaded")
 
                     logger.info(f"chunk_tiles:\n{chunk_tiles}")
 
-                    for chunk_tile in chunk_tiles:
-                        logger.debug(f"{chunk_tile.boxes}")
+                    for n, chunk_tile in enumerate(chunk_tiles):
+                        logger.debug(f"Tile {n+1}/{len(chunk_tiles)}: {chunk_tile.boxes}")
 
                         pil_images = []
                         for frame_idx, box in sorted(chunk_tile.boxes.items()):
@@ -313,15 +335,43 @@ For each tracked object (identified by a text prompt and an object ID):
                             x1, y1, x2, y2 = box
                             box_w = x2 - x1
                             box_h = y2 - y1
+                            tgt = full_mask_images[frame_idx][y1:y2 ,x1:x2, :]
+                            fine_mask = np.zeros_like(tgt)
                             frameId = frame_idx - chunk_tile.start_frame
+                            logger.debug(f"frame: {frame_idx}; tile: {box}; items number: {len(outputs_per_frame_visu[frameId].keys())}")
                             for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                                 mask = maskBoxProb["mask"]
                                 buf_in = oiio.ImageBuf(mask.astype('float32'))
                                 buf_out = oiio.ImageBufAlgo.resample(buf_in, roi=oiio.ROI(0, box_w, 0, box_h))
                                 mask = buf_out.get_pixels().reshape(box_h, box_w, 1)
-                                tgt = full_mask_images[frame_idx][y1:y2 ,x1:x2, :]
                                 bool_mask = mask.squeeze() > 0
-                                tgt[bool_mask] = [255, 255, 255]
+                                fine_mask[bool_mask] = [255, 255, 255]
+
+                            if frame_idx in full_rough_mask_images:
+                                imgBuf = oiio.ImageBuf(full_rough_mask_images[frame_idx])
+                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
+                                rough_mask_crop = imgBuf.get_pixels(format=oiio.FLOAT)
+                                if rough_mask_crop.ndim == 3 and rough_mask_crop.shape[2] >= 3:
+                                    rough_mask_R = rough_mask_crop[:, :, 0]
+                                else:
+                                    rough_mask_R = rough_mask_crop.squeeze()
+
+                                intersection = np.logical_and(fine_mask[:, :, 0], rough_mask_R).sum()
+                                union = np.logical_or(fine_mask[:, :, 0], rough_mask_R).sum()
+                                if union == 0:
+                                    IoU = 0.0
+                                else:
+                                    IoU = float(intersection / union)
+
+                                logger.debug(f"IoU = {IoU}")
+                                if IoU < 0.9:
+                                    logger.debug("Use rough mask for this tile")
+                                    fine_mask = rough_mask_crop
+
+                            # Union where tiles overlap
+                            existing_mask = full_mask_images[frame_idx][y1:y2 ,x1:x2, 0]
+                            final_mask = np.logical_or(fine_mask[:, :, 0], existing_mask)
+                            full_mask_images[frame_idx][y1:y2 ,x1:x2, :] = np.dstack([final_mask] * 3)
 
                         video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
 

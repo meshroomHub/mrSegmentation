@@ -1,4 +1,5 @@
 import json
+import math
 from dataclasses import dataclass, field
 
 SIZE_THRESHOLDS = [252, 504, 1008]
@@ -263,7 +264,7 @@ def extract_tracking(
     return result
 
 
-def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: float, logger) -> list[TrackChunk]:
+def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, max_tile_number_per_dimension: int, par: float, logger) -> list[TrackChunk]:
     """
     Tile a chunk of consecutive frames by creating a set of chunks.
     One chunk on the same consecutive frames for every tiles.
@@ -275,10 +276,12 @@ def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: fl
 
     logger.info(f"Boxes size {box_w}x{box_h}")
 
-    tile_nb_w = (box_w // targetTileSize) + 1
-    tile_nb_h = (box_h // targetTileSize) + 1
-    tile_size_w = min(targetTileSize, box_w)
-    tile_size_h = min(targetTileSize, box_h)
+    tile_size_w_min = math.ceil((box_w + (max_tile_number_per_dimension - 1) * min_overlap) / max_tile_number_per_dimension)
+    tile_size_h_min = math.ceil((box_h + (max_tile_number_per_dimension - 1) * min_overlap) / max_tile_number_per_dimension)
+    tile_size_w = min(max(targetTileSize, tile_size_w_min), box_w)
+    tile_size_h = min(max(targetTileSize, tile_size_h_min), box_h)
+    tile_nb_w = (box_w // tile_size_w) + 1
+    tile_nb_h = (box_h // tile_size_h) + 1
     overlap_w = 0
     overlap_h = 0
     start_cols = [0]
