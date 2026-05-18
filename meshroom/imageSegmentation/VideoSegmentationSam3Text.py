@@ -159,7 +159,7 @@ from a text prompt.
         ),
     ]
 
-    def preprocess(self, node):
+    def resolvePaths(self, node):
         import re
         input_path = node.input.value
         image_paths = get_image_paths_list(input_path)
@@ -186,6 +186,9 @@ from a text prompt.
         import json
 
         try:
+
+            self.resolvePaths(chunk.node)
+
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
             if not chunk.node.input:
