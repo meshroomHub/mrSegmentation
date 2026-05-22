@@ -1,8 +1,9 @@
-__version__ = "2.0"
+__version__ = "3.0"
 
 import chunk
 import os
 from pathlib import Path
+from xml.etree.ElementTree import VERSION
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
@@ -75,12 +76,6 @@ For each tracked object (identified by a text prompt and an object ID):
             value="",
         ),
         desc.File(
-            name="masksFolder",
-            label="Masks Folder",
-            description="Folder containing the masks computed at original resolution.",
-            value="",
-        ),
-        desc.File(
             name="bboxesFolder",
             label="Bounding Boxes Folder",
             description="Folder containing the bboxes.json file associated to the sfmData used as input.",
@@ -131,13 +126,6 @@ For each tracked object (identified by a text prompt and an object ID):
             label="Fine Masks Minimal IoU With Coarse Mask",
             description="Minimal IoU between coarse and fine mask within a tile to keep the fine mask.",
             value=0.5,
-            enabled=lambda node: node.enableTiling.value,
-        ),
-        desc.BoolParam(
-            name="drawTilesInDebug",
-            label="Draw Tiles On Mask In Debug Mode",
-            description="Bake tiles borders in mask images",
-            value=True,
             enabled=lambda node: node.enableTiling.value,
         ),
         desc.BoolParam(
@@ -194,6 +182,13 @@ For each tracked object (identified by a text prompt and an object ID):
             value="info",
             values=VERBOSE_LEVEL,
             exclusive=True,
+        ),
+        desc.BoolParam(
+            name="drawTilesInDebug",
+            label="Draw Tiles On Mask In Debug Mode",
+            description="Bake tiles borders in mask images",
+            value=True,
+            enabled=lambda node: node.verboseLevel.value == "debug",
         ),
     ]
 
