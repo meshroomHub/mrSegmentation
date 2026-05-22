@@ -1,5 +1,6 @@
 __version__ = "2.0"
 
+import chunk
 import os
 from pathlib import Path
 
@@ -86,6 +87,19 @@ For each tracked object (identified by a text prompt and an object ID):
             value="",
         ),
         desc.BoolParam(
+            name="forceSquaredBoxes",
+            label="Force Squared Boxes",
+            description="Transform rectangle boxes into square ones. The square side is the largest side of the rectangle",
+            value=False,
+        ),
+        desc.FloatParam(
+            name="boxExtensionFactor",
+            label="Box Extension Factor",
+            description="Multiply each box sides by this factor",
+            value=1.05,
+            range=(1.0, 0.01, 2.0),
+        ),
+        desc.BoolParam(
             name="enableTiling",
             label="Enable Tiling",
             description="Enable tiling in big boxes.",
@@ -112,12 +126,26 @@ For each tracked object (identified by a text prompt and an object ID):
             value=2,
             enabled=lambda node: node.enableTiling.value,
         ),
+        desc.FloatParam(
+            name="minIoU",
+            label="Fine Masks Minimal IoU With Coarse Mask",
+            description="Minimal IoU between coarse and fine mask within a tile to keep the fine mask.",
+            value=0.5,
+            enabled=lambda node: node.enableTiling.value,
+        ),
+        desc.BoolParam(
+            name="drawTilesInDebug",
+            label="Draw Tiles On Mask In Debug Mode",
+            description="Bake tiles borders in mask images",
+            value=True,
+            enabled=lambda node: node.enableTiling.value,
+        ),
         desc.BoolParam(
             name="roundCropSize",
-            label="Round Crop Size",
-            description="Round crop size to 252, 504 or 1008 for tube with smaller bounding boxes.",
+            label="Fit Sam3 Model Input Size If Possible",
+            description="Round crop size to 252x252, 504x504 or 1008x1008 for tube with smaller bounding boxes.",
             value=True,
-            enabled=lambda node: not node.enableTiling.value,
+            enabled=lambda node: node.forceSquaredBoxes.value,
         ),
         desc.File(
             name="segmentationModelPath",
@@ -137,6 +165,12 @@ For each tracked object (identified by a text prompt and an object ID):
             description="Set GPU power requirement.",
             value=True,
             invalidate=False,
+        ),
+        desc.BoolParam(
+            name="computeOnFirstFrameOnly",
+            label="Compute On First Frame Only",
+            description="Compute segmentation only on the first frame.",
+            value=False,
         ),
         desc.BoolParam(
             name="keepFilename",
@@ -179,12 +213,15 @@ For each tracked object (identified by a text prompt and an object ID):
         ),
     ]
 
-    def preprocess(self, node):
+    def resolvePaths(self, node):
         input_path = node.input.value
         image_paths = get_image_paths_list(input_path, node.inputx2.value, node.inputx4.value)
         if len(image_paths) == 0:
             raise FileNotFoundError(f'No image files found in {input_path}')
-        self.image_paths = image_paths
+        if node.computeOnFirstFrameOnly.value:
+            self.image_paths = [image_paths[0]]
+        else:
+            self.image_paths = image_paths
         if node.bboxesFolder.value == "":
             raise ValueError(f'No file containing bounding boxes connected')
 
@@ -198,6 +235,8 @@ For each tracked object (identified by a text prompt and an object ID):
         import OpenImageIO as oiio
 
         try:
+
+            self.resolvePaths(chunk.node)
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
             if not chunk.node.input:
@@ -229,8 +268,10 @@ For each tracked object (identified by a text prompt and an object ID):
             x2_ok = os.path.exists(chunk.node.inputx2.value)
             x4_ok = os.path.exists(chunk.node.inputx4.value)
             roundCrop = chunk.node.roundCropSize.value
-            bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, x2_ok, x4_ok, roundCrop, par)
-            bboxes_metadata = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, roundCrop, par)
+            squareBox = chunk.node.forceSquaredBoxes.value
+            exp_factor = chunk.node.boxExtensionFactor.value
+            bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, x2_ok, x4_ok, roundCrop, squareBox, exp_factor, par)
+            bboxes_metadata = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, roundCrop, squareBox, exp_factor, par)
             metadata_boxes = {}
             for frameId in range(len(chunk_image_paths)):
                 metadata_boxes[firstFrameId + frameId] = {}
@@ -259,58 +300,62 @@ For each tracked object (identified by a text prompt and an object ID):
                     if chunk.node.enableTiling.value:
                         chunk_tiles = bboxUtils.tile_chunk(frame_chunk, chunk.node.targetTileSize.value,
                                                            chunk.node.minimalOverlap.value,
-                                                           chunk.node.maximalNumberOfTilesPerDimension.value, sourceInfo["PAR"], logger)
+                                                           chunk.node.maximalNumberOfTilesPerDimension.value, sourceInfo["PAR"],
+                                                           chunk.node.roundCropSize.value, logger)
 
                     # In tiling mode, avoid loading all frames for every new tiles
                     full_pil_images = {}
                     full_rough_mask_images = {}
                     if chunk.node.enableTiling.value:
                         for frameId, _ in chunk_tiles[0].boxes.items():
-                            img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
-                            full_pil_images[frameId] = img
-                            rough_mask_image_path = os.path.join(chunk.node.bboxesFolder.value, Path(chunk_image_paths[frameId - firstFrameId][0]).stem)
-                            if os.path.exists(Path(str(rough_mask_image_path) + ".exr")):
-                                rough_mask_image_path = Path(str(rough_mask_image_path) + ".exr")
-                            elif os.path.exists(Path(str(rough_mask_image_path) + ".png")):
-                                rough_mask_image_path = Path(str(rough_mask_image_path) + ".png")
-                            elif os.path.exists(Path(str(rough_mask_image_path) + ".jpg")):
-                                rough_mask_image_path = Path(str(rough_mask_image_path) + ".jpg")
-                            if os.path.isfile(rough_mask_image_path):
-                                rough_mask, h_ori, w_ori, PAR, orientation = image.loadImage(str(rough_mask_image_path), True)
-                                full_rough_mask_images[frameId] = rough_mask
+                            if not chunk.node.computeOnFirstFrameOnly or frameId == chunk_image_paths[0][2]:
+                                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
+                                full_pil_images[frameId] = img
+                                rough_mask_image_path = os.path.join(chunk.node.bboxesFolder.value, Path(chunk_image_paths[frameId - firstFrameId][0]).stem)
+                                if os.path.exists(Path(str(rough_mask_image_path) + ".exr")):
+                                    rough_mask_image_path = Path(str(rough_mask_image_path) + ".exr")
+                                elif os.path.exists(Path(str(rough_mask_image_path) + ".png")):
+                                    rough_mask_image_path = Path(str(rough_mask_image_path) + ".png")
+                                elif os.path.exists(Path(str(rough_mask_image_path) + ".jpg")):
+                                    rough_mask_image_path = Path(str(rough_mask_image_path) + ".jpg")
+                                if os.path.isfile(rough_mask_image_path):
+                                    rough_mask, h_ori, w_ori, PAR, orientation = image.loadImage(str(rough_mask_image_path), True)
+                                    full_rough_mask_images[frameId] = rough_mask
                         if not full_rough_mask_images:
                             logger.info("No rough masks loaded")
 
                     logger.info(f"chunk_tiles:\n{chunk_tiles}")
 
-                    for n, chunk_tile in enumerate(chunk_tiles):
-                        logger.debug(f"Tile {n+1}/{len(chunk_tiles)}: {chunk_tile.boxes}")
+                    for tile_idx, chunk_tile in enumerate(chunk_tiles):
+                        logger.debug(f"Tile {tile_idx+1}/{len(chunk_tiles)}: {chunk_tile.boxes}")
 
                         pil_images = []
                         for frame_idx, box in sorted(chunk_tile.boxes.items()):
-                            x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
-                            box_w = x2 - x1
-                            box_h = y2 - y1
 
-                            if box_w <= 252 and box_h <= 252 and x4_ok and not chunk.node.enableTiling.value:
-                                img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][7]), True)
-                                imgBuf = oiio.ImageBuf(img)
-                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(4*x1, 4*x2, 4*y1, 4*y2))
-                            elif box_w <= 504 and box_h <= 504 and x2_ok and not chunk.node.enableTiling.value:
-                                img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][6]), True)
-                                imgBuf = oiio.ImageBuf(img)
-                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(2*x1, 2*x2, 2*y1, 2*y2))
-                            elif not chunk.node.enableTiling.value:
-                                img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][0]), True)
-                                imgBuf = oiio.ImageBuf(img)
-                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
-                            else:
-                                # use already loaded images
-                                imgBuf = oiio.ImageBuf(full_pil_images[frame_idx])
-                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
+                            if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
+                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
+                                box_w = x2 - x1
+                                box_h = y2 - y1
 
-                            img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
-                            pil_images.append(Image.fromarray((255.0*img_crop).astype("uint8")))
+                                if box_w <= 252 and box_h <= 252 and x4_ok and not chunk.node.enableTiling.value:
+                                    img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][7]), True)
+                                    imgBuf = oiio.ImageBuf(img)
+                                    imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(4*x1, 4*x2, 4*y1, 4*y2))
+                                elif box_w <= 504 and box_h <= 504 and x2_ok and not chunk.node.enableTiling.value:
+                                    img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][6]), True)
+                                    imgBuf = oiio.ImageBuf(img)
+                                    imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(2*x1, 2*x2, 2*y1, 2*y2))
+                                elif not chunk.node.enableTiling.value:
+                                    img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][0]), True)
+                                    imgBuf = oiio.ImageBuf(img)
+                                    imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
+                                else:
+                                    # use already loaded images
+                                    imgBuf = oiio.ImageBuf(full_pil_images[frame_idx])
+                                    imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
+
+                                img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
+                                pil_images.append(Image.fromarray((255.0*img_crop).astype("uint8")))
 
                         response = video_predictor.handle_request(
                             request=dict(
@@ -332,46 +377,52 @@ For each tracked object (identified by a text prompt and an object ID):
                         outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame)
 
                         for frame_idx, box in sorted(chunk_tile.boxes.items()):
-                            x1, y1, x2, y2 = box
-                            box_w = x2 - x1
-                            box_h = y2 - y1
-                            tgt = full_mask_images[frame_idx][y1:y2 ,x1:x2, :]
-                            fine_mask = np.zeros_like(tgt)
-                            frameId = frame_idx - chunk_tile.start_frame
-                            logger.debug(f"frame: {frame_idx}; tile: {box}; items number: {len(outputs_per_frame_visu[frameId].keys())}")
-                            for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
-                                mask = maskBoxProb["mask"]
-                                buf_in = oiio.ImageBuf(mask.astype('float32'))
-                                buf_out = oiio.ImageBufAlgo.resample(buf_in, roi=oiio.ROI(0, box_w, 0, box_h))
-                                mask = buf_out.get_pixels().reshape(box_h, box_w, 1)
-                                bool_mask = mask.squeeze() > 0
-                                fine_mask[bool_mask] = [255, 255, 255]
+                            if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
+                                x1, y1, x2, y2 = box
+                                box_w = x2 - x1
+                                box_h = y2 - y1
+                                tgt = full_mask_images[frame_idx][y1:y2 ,x1:x2, :]
+                                fine_mask = np.zeros_like(tgt)
+                                frameId = frame_idx - chunk_tile.start_frame
+                                logger.debug(f"frame: {frame_idx}; tile: {box}; items number: {len(outputs_per_frame_visu[frameId].keys())}")
+                                for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
+                                    mask = maskBoxProb["mask"]
+                                    buf_in = oiio.ImageBuf(mask.astype('float32'))
+                                    buf_out = oiio.ImageBufAlgo.resample(buf_in, roi=oiio.ROI(0, box_w, 0, box_h))
+                                    mask = buf_out.get_pixels().reshape(box_h, box_w, 1)
+                                    bool_mask = mask.squeeze() > 0
+                                    fine_mask[bool_mask] = [255, 255, 255]
 
-                            if frame_idx in full_rough_mask_images:
-                                imgBuf = oiio.ImageBuf(full_rough_mask_images[frame_idx])
-                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
-                                rough_mask_crop = imgBuf.get_pixels(format=oiio.FLOAT)
-                                if rough_mask_crop.ndim == 3 and rough_mask_crop.shape[2] >= 3:
-                                    rough_mask_R = rough_mask_crop[:, :, 0]
-                                else:
-                                    rough_mask_R = rough_mask_crop.squeeze()
+                                if frame_idx in full_rough_mask_images:
+                                    imgBuf = oiio.ImageBuf(full_rough_mask_images[frame_idx])
+                                    imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
+                                    rough_mask_crop = imgBuf.get_pixels(format=oiio.FLOAT)
+                                    if rough_mask_crop.ndim == 3 and rough_mask_crop.shape[2] >= 3:
+                                        rough_mask_R = rough_mask_crop[:, :, 0]
+                                    else:
+                                        rough_mask_R = rough_mask_crop.squeeze()
 
-                                intersection = np.logical_and(fine_mask[:, :, 0], rough_mask_R).sum()
-                                union = np.logical_or(fine_mask[:, :, 0], rough_mask_R).sum()
-                                if union == 0:
-                                    IoU = 0.0
-                                else:
-                                    IoU = float(intersection / union)
+                                    intersection = np.logical_and(fine_mask[:, :, 0], rough_mask_R).sum()
+                                    union = np.logical_or(fine_mask[:, :, 0], rough_mask_R).sum()
+                                    if union == 0:
+                                        IoU = 0.0
+                                    else:
+                                        IoU = float(intersection / union)
 
-                                logger.debug(f"IoU = {IoU}")
-                                if IoU < 0.9:
-                                    logger.debug("Use rough mask for this tile")
-                                    fine_mask = rough_mask_crop
+                                    logger.debug(f"IoU = {IoU}")
+                                    if chunk.node.enableTiling.value and IoU < chunk.node.minIoU.value:
+                                        logger.info(f"frame_idx = {frame_idx}; Tile = {tile_idx}; IoU = {IoU} => Use rough mask for this tile")
+                                        fine_mask = rough_mask_crop
 
-                            # Union where tiles overlap
-                            existing_mask = full_mask_images[frame_idx][y1:y2 ,x1:x2, 0]
-                            final_mask = np.logical_or(fine_mask[:, :, 0], existing_mask)
-                            full_mask_images[frame_idx][y1:y2 ,x1:x2, :] = np.dstack([final_mask] * 3)
+                                # Union where tiles overlap
+                                existing_mask = full_mask_images[frame_idx][y1:y2 ,x1:x2, 0]
+                                final_mask = np.logical_or(fine_mask[:, :, 0], existing_mask)
+                                full_mask_images[frame_idx][y1:y2, x1:x2, 0:1] = np.dstack([final_mask])
+                                if chunk.node.verboseLevel.value.upper() == "DEBUG" and chunk.node.drawTilesInDebug.value:
+                                    full_mask_images[frame_idx][y1:y2, x1:x1+1, 1:3] = [255, 255]
+                                    full_mask_images[frame_idx][y1:y2, x2:x2+1, 1:3] = [255, 255]
+                                    full_mask_images[frame_idx][y1:y1+1, x1:x2, 1:3] = [255, 255]
+                                    full_mask_images[frame_idx][y2:y2+1, x1:x2, 1:3] = [255, 255]
 
                         video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
 
@@ -382,17 +433,24 @@ For each tracked object (identified by a text prompt and an object ID):
                     textPrompt, obj_id = key, ""
                 for frame_chunk in frame_chunks:
                     for frame_idx, box in sorted(frame_chunk.boxes.items()):
-                        if textPrompt not in metadata_boxes[frame_idx]:
-                            metadata_boxes[frame_idx][textPrompt] = {}
-                        x1, y1, x2, y2 = box
-                        bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
-                        metadata_boxes[frame_idx][textPrompt][textPrompt + "_" + str(obj_id)] = bbox_str
+                        if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
+                            if textPrompt not in metadata_boxes[frame_idx]:
+                                metadata_boxes[frame_idx][textPrompt] = {}
+                            x1, y1, x2, y2 = box
+                            bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
+                            metadata_boxes[frame_idx][textPrompt][textPrompt + "_" + str(obj_id)] = bbox_str
 
             for frameId, image_path in enumerate(chunk_image_paths):
+                m = full_mask_images[image_path[2]][:,:,0:1] > 0
                 if chunk.node.maskInvert.value:
-                    mask = (full_mask_images[image_path[2]][:,:,0:1] == 0).astype('float32')
+                    mask = np.ones_like(img)
+                    mask[m[:, :, 0]] = [0, 0, 0]
                 else:
-                    mask = (full_mask_images[image_path[2]][:,:,0:1] > 0).astype('float32')
+                    mask = np.zeros_like(img)
+                    mask[m[:, :, 0]] = [1.0, 1.0, 1.0]
+                if chunk.node.verboseLevel.value.upper() == "DEBUG" and chunk.node.drawTilesInDebug.value:
+                    g = full_mask_images[image_path[2]][:,:,1:2] > 0
+                    mask[g[:, :, 0]] = [1.0, 0, 0]
                 logger.info(f"frameId: {frameId} - {image_path[0]}")
 
                 if chunk.node.keepFilename.value:
