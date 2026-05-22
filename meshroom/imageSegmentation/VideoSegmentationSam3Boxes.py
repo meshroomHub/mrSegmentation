@@ -294,31 +294,66 @@ For each tracked object (identified by a text prompt and an object ID):
 
                     chunk_tiles = [frame_chunk]
                     if chunk.node.enableTiling.value:
-                        chunk_tiles = bboxUtils.tile_chunk(frame_chunk, chunk.node.targetTileSize.value,
-                                                           chunk.node.minimalOverlap.value,
-                                                           chunk.node.maximalNumberOfTilesPerDimension.value, sourceInfo["PAR"],
-                                                           chunk.node.roundCropSize.value, logger)
+                        chunk_tiles_tmp = bboxUtils.tile_chunk(frame_chunk, chunk.node.targetTileSize.value,
+                                                               chunk.node.minimalOverlap.value,
+                                                               chunk.node.maximalNumberOfTilesPerDimension.value, sourceInfo["PAR"],
+                                                               chunk.node.roundCropSize.value, logger)
+                        for chunk_tile in chunk_tiles_tmp:
+                            chunk_tiles.append(chunk_tile)
 
                     # In tiling mode, avoid loading all frames for every new tiles
                     full_pil_images = {}
                     full_rough_mask_images = {}
-                    if chunk.node.enableTiling.value:
-                        for frameId, _ in chunk_tiles[0].boxes.items():
+                    if chunk.node.enableTiling.value and len(chunk_tiles) > 1:
+                        pil_images = []
+                        for frameId, box in chunk_tiles[0].boxes.items():
                             if not chunk.node.computeOnFirstFrameOnly or frameId == chunk_image_paths[0][2]:
                                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
                                 full_pil_images[frameId] = img
-                                rough_mask_image_path = os.path.join(chunk.node.bboxesFolder.value, Path(chunk_image_paths[frameId - firstFrameId][0]).stem)
-                                if os.path.exists(Path(str(rough_mask_image_path) + ".exr")):
-                                    rough_mask_image_path = Path(str(rough_mask_image_path) + ".exr")
-                                elif os.path.exists(Path(str(rough_mask_image_path) + ".png")):
-                                    rough_mask_image_path = Path(str(rough_mask_image_path) + ".png")
-                                elif os.path.exists(Path(str(rough_mask_image_path) + ".jpg")):
-                                    rough_mask_image_path = Path(str(rough_mask_image_path) + ".jpg")
-                                if os.path.isfile(rough_mask_image_path):
-                                    rough_mask, h_ori, w_ori, PAR, orientation = image.loadImage(str(rough_mask_image_path), True)
-                                    full_rough_mask_images[frameId] = rough_mask
-                        if not full_rough_mask_images:
-                            logger.info("No rough masks loaded")
+                                full_rough_mask_images[frameId] = np.zeros_like(img)
+                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
+                                imgBuf = oiio.ImageBuf(img)
+                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
+                                img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
+                                pil_images.append(Image.fromarray((255.0*img_crop).astype("uint8")))
+ 
+                        response = video_predictor.handle_request(
+                            request=dict(
+                                type="start_session",
+                                resource_path=pil_images,
+                                )
+                        )
+                        session_id = response["session_id"]
+
+                        video_predictor.handle_request(
+                            request=dict(
+                                type="add_prompt",
+                                session_id=session_id,
+                                frame_index=0,
+                                text=textPrompt,
+                            )
+                        )
+                        outputs_per_frame = sam3Utils.propagateInVideo(video_predictor, session_id)
+                        outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame)
+
+                        for frame_idx, box in sorted(chunk_tiles[0].boxes.items()):
+                            if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
+                                x1, y1, x2, y2 = box
+                                box_w = x2 - x1
+                                box_h = y2 - y1
+                                tgt = full_rough_mask_images[frame_idx][y1:y2 ,x1:x2, :]
+                                mask_in_full_box = np.zeros_like(tgt)
+                                frameId = frame_idx - chunk_tile.start_frame
+                                for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
+                                    mask = maskBoxProb["mask"]
+                                    buf_in = oiio.ImageBuf(mask.astype('float32'))
+                                    buf_out = oiio.ImageBufAlgo.resample(buf_in, roi=oiio.ROI(0, box_w, 0, box_h))
+                                    mask = buf_out.get_pixels().reshape(box_h, box_w, 1)
+                                    bool_mask = mask.squeeze() > 0
+                                    mask_in_full_box[bool_mask] = [1.0, 1.0, 1.0]
+                                full_rough_mask_images[frame_idx][y1:y2, x1:x2, :] = mask_in_full_box
+
+                        chunk_tiles.pop(0)
 
                     logger.info(f"chunk_tiles:\n{chunk_tiles}")
 
