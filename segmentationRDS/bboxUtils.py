@@ -104,7 +104,7 @@ def get_target_size(boxes: dict, par: float, roundSize: bool = True, squareBox: 
         max_size_h = max_size_w
         if roundSize:
             for threshold in SIZE_THRESHOLDS :
-                if int(extension_factor * max_size_w) < threshold and int(extension_factor * max_size_h) < threshold:
+                if max_size_w < threshold and max_size_h < threshold:
                     return threshold, threshold
 
     return max_size_w, max_size_h

@@ -1,9 +1,7 @@
 __version__ = "3.0"
 
-import chunk
 import os
 from pathlib import Path
-from xml.etree.ElementTree import VERSION
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
@@ -206,6 +204,13 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             description="Transform rectangle boxes into square ones. The square side is the largest side of the rectangle",
             value=False,
         ),
+        desc.BoolParam(
+            name="roundCropSize",
+            label="Fit Sam3 Model Input Size If Possible",
+            description="Round crop size to 252x252, 504x504 or 1008x1008 for tube with smaller bounding boxes.",
+            value=True,
+            enabled=lambda node: node.forceSquaredBoxes.value,
+        ),
         desc.FloatParam(
             name="boxExtensionFactor",
             label="Box Extension Factor",
@@ -231,6 +236,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             label="Minimal Overlap",
             description="Minimal tile overlap.",
             value=16,
+            range=(1, 1, 1008),
             enabled=lambda node: node.enableTiling.value,
         ),
         desc.IntParam(
@@ -238,6 +244,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             label="Maximal Number Of Tiles Per Dimension",
             description="Maximal number of tiles for width end height.",
             value=2,
+            range=(1, 1, 8),
             enabled=lambda node: node.enableTiling.value,
         ),
         desc.FloatParam(
@@ -246,13 +253,6 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             description="Minimal IoU between coarse and fine mask within a tile to keep the fine mask.",
             value=0.5,
             enabled=lambda node: node.enableTiling.value,
-        ),
-        desc.BoolParam(
-            name="roundCropSize",
-            label="Fit Sam3 Model Input Size If Possible",
-            description="Round crop size to 252x252, 504x504 or 1008x1008 for tube with smaller bounding boxes.",
-            value=True,
-            enabled=lambda node: node.forceSquaredBoxes.value,
         ),
         desc.File(
             name="segmentationModelPath",
@@ -366,7 +366,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            gpus_to_use = [torch.cuda.current_device()]
+            gpus_to_use = [torch.cuda.current_device()] if torch.cuda.is_available() else None
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
 
             metadata_deep_model = {}
@@ -426,7 +426,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
                     if chunk.node.enableTiling.value and len(chunk_tiles) > 1:
                         pil_images = []
                         for frameId, box in chunk_tiles[0].boxes.items():
-                            if not chunk.node.computeOnFirstFrameOnly or frameId == chunk_image_paths[0][2]:
+                            if not chunk.node.computeOnFirstFrameOnly.value or frameId == chunk_image_paths[0][2]:
                                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
                                 full_pil_images[frameId] = img
                                 full_rough_mask_images[frameId] = np.zeros_like(img)
@@ -456,13 +456,13 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
                         outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame)
 
                         for frame_idx, box in sorted(chunk_tiles[0].boxes.items()):
-                            if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
+                            if not chunk.node.computeOnFirstFrameOnly.value or frame_idx == chunk_image_paths[0][2]:
                                 x1, y1, x2, y2 = box
                                 box_w = x2 - x1
                                 box_h = y2 - y1
                                 tgt = full_rough_mask_images[frame_idx][y1:y2 ,x1:x2, :]
                                 mask_in_full_box = np.zeros_like(tgt)
-                                frameId = frame_idx - chunk_tile.start_frame
+                                frameId = frame_idx - chunk_tiles[0].start_frame
                                 for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                                     mask = maskBoxProb["mask"]
                                     buf_in = oiio.ImageBuf(mask.astype('float32'))
@@ -482,7 +482,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
                         pil_images = []
                         for frame_idx, box in sorted(chunk_tile.boxes.items()):
 
-                            if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
+                            if not chunk.node.computeOnFirstFrameOnly.value or frame_idx == chunk_image_paths[0][2]:
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                 box_w = x2 - x1
                                 box_h = y2 - y1
@@ -527,8 +527,8 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
                         outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame)
 
                         for frame_idx, box in sorted(chunk_tile.boxes.items()):
-                            if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
-                                x1, y1, x2, y2 = box
+                            if not chunk.node.computeOnFirstFrameOnly.value or frame_idx == chunk_image_paths[0][2]:
+                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                 box_w = x2 - x1
                                 box_h = y2 - y1
                                 tgt = full_mask_images[frame_idx][y1:y2 ,x1:x2, :]
@@ -583,7 +583,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
                     textPrompt, obj_id = key, ""
                 for frame_chunk in frame_chunks:
                     for frame_idx, box in sorted(frame_chunk.boxes.items()):
-                        if not chunk.node.computeOnFirstFrameOnly or frame_idx == chunk_image_paths[0][2]:
+                        if not chunk.node.computeOnFirstFrameOnly.value or frame_idx == chunk_image_paths[0][2]:
                             if textPrompt not in metadata_boxes[frame_idx]:
                                 metadata_boxes[frame_idx][textPrompt] = {}
                             x1, y1, x2, y2 = box
@@ -593,10 +593,10 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             for frameId, image_path in enumerate(chunk_image_paths):
                 m = full_mask_images[image_path[2]][:,:,0:1] > 0
                 if chunk.node.maskInvert.value:
-                    mask = np.ones_like(img)
+                    mask = np.ones_like(full_mask_images[image_path[2]])
                     mask[m[:, :, 0]] = [0, 0, 0]
                 else:
-                    mask = np.zeros_like(img)
+                    mask = np.zeros_like(full_mask_images[image_path[2]])
                     mask[m[:, :, 0]] = [1.0, 1.0, 1.0]
                 if chunk.node.verboseLevel.value.upper() == "DEBUG" and chunk.node.drawTilesInDebug.value:
                     g = full_mask_images[image_path[2]][:,:,1:2] > 0
