@@ -216,7 +216,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             label="Box Extension Factor",
             description="Multiply each box sides by this factor",
             value=1.05,
-            range=(1.0, 0.01, 2.0),
+            range=(1.0, 2.0, 0.01),
         ),
         desc.BoolParam(
             name="enableTiling",
@@ -236,7 +236,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             label="Minimal Overlap",
             description="Minimal tile overlap.",
             value=16,
-            range=(1, 1, 1008),
+            range=(1, 1008, 1),
             enabled=lambda node: node.enableTiling.value,
         ),
         desc.IntParam(
@@ -244,7 +244,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             label="Maximal Number Of Tiles Per Dimension",
             description="Maximal number of tiles for width end height.",
             value=2,
-            range=(1, 1, 8),
+            range=(1, 8, 1),
             enabled=lambda node: node.enableTiling.value,
         ),
         desc.FloatParam(
@@ -457,7 +457,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
 
                         for frame_idx, box in sorted(chunk_tiles[0].boxes.items()):
                             if not chunk.node.computeOnFirstFrameOnly.value or frame_idx == chunk_image_paths[0][2]:
-                                x1, y1, x2, y2 = box
+                                x1, y1, x2, y2 = bboxUtils.box_to_display(box)
                                 box_w = x2 - x1
                                 box_h = y2 - y1
                                 tgt = full_rough_mask_images[frame_idx][y1:y2 ,x1:x2, :]
