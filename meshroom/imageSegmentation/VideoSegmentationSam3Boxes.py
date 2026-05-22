@@ -253,6 +253,7 @@ For each tracked object (identified by a text prompt and an object ID):
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video-Crop"
+            metadata_deep_model["Meshroom:mrSegmentation:NodeVersion"] = "sam3Boxes-" + __version__
 
             # bboxes.json decoding
             json_path = os.path.join(chunk.node.bboxesFolder.value, "bboxes.json")
