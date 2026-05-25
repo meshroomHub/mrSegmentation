@@ -457,7 +457,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
 
                         for frame_idx, box in sorted(chunk_tiles[0].boxes.items()):
                             if not chunk.node.computeOnFirstFrameOnly.value or frame_idx == chunk_image_paths[0][2]:
-                                x1, y1, x2, y2 = bboxUtils.box_to_display(box)
+                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                 box_w = x2 - x1
                                 box_h = y2 - y1
                                 tgt = full_rough_mask_images[frame_idx][y1:y2 ,x1:x2, :]
