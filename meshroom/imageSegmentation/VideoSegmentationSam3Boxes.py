@@ -201,7 +201,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
         desc.BoolParam(
             name="forceSquaredBoxes",
             label="Force Squared Boxes",
-            description="Transform rectangle boxes into square ones. The square side is the largest side of the rectangle",
+            description="Transform rectangle boxes into square ones. The square side is the largest side of the rectangle.",
             value=False,
         ),
         desc.BoolParam(
@@ -214,7 +214,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
         desc.FloatParam(
             name="boxExtensionFactor",
             label="Box Extension Factor",
-            description="Multiply each box sides by this factor",
+            description="Multiply all the box sides by this factor.",
             value=1.05,
             range=(1.0, 2.0, 0.01),
         ),
@@ -242,7 +242,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
         desc.IntParam(
             name="maximalNumberOfTilesPerDimension",
             label="Maximal Number Of Tiles Per Dimension",
-            description="Maximal number of tiles for width end height.",
+            description="Maximal number of tiles for width and height.",
             value=2,
             range=(1, 8, 1),
             enabled=lambda node: node.enableTiling.value,
@@ -294,6 +294,13 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             values=["exr", "png", "jpg"],
             exclusive=True,
         ),
+        desc.BoolParam(
+            name="drawTilesInDebug",
+            label="Draw Tiles On Mask In Debug Mode",
+            description="Bake tile borders in debug mask images.",
+            value=True,
+            enabled=lambda node: node.verboseLevel.value == "debug",
+        ),
         desc.ChoiceParam(
             name="verboseLevel",
             label="Verbose Level",
@@ -301,13 +308,6 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             value="info",
             values=VERBOSE_LEVEL,
             exclusive=True,
-        ),
-        desc.BoolParam(
-            name="drawTilesInDebug",
-            label="Draw Tiles On Mask In Debug Mode",
-            description="Bake tiles borders in mask images",
-            value=True,
-            enabled=lambda node: node.verboseLevel.value == "debug",
         ),
     ]
 

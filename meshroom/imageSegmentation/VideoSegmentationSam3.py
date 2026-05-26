@@ -96,14 +96,6 @@ In order to associate a point to a given submask, it must be colored with the su
             values=["exr", "png", "jpg"],
             exclusive=True,
         ),
-        desc.ChoiceParam(
-            name="verboseLevel",
-            label="Verbose Level",
-            description="Verbosity level (fatal, error, warning, info, debug).",
-            value="info",
-            values=VERBOSE_LEVEL,
-            exclusive=True,
-        ),
         desc.ShapeList(
             name="positiveClicks",
             label="Positive Clicks",
@@ -134,6 +126,14 @@ In order to associate a point to a given submask, it must be colored with the su
             description="Single bounding box used as initial prompt.",
             keyable=True,
             keyType="viewId"
+        ),
+        desc.ChoiceParam(
+            name="verboseLevel",
+            label="Verbose Level",
+            description="Verbosity level (fatal, error, warning, info, debug).",
+            value="info",
+            values=VERBOSE_LEVEL,
+            exclusive=True,
         ),
     ]
 
