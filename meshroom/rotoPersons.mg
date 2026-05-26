@@ -14,16 +14,16 @@
         "CameraInit_1": {
             "nodeType": "CameraInit",
             "position": [
-                -180,
-                -40
+                -200,
+                0
             ],
             "inputs": {}
         },
         "CopyFiles_1": {
             "nodeType": "CopyFiles",
             "position": [
-                532,
-                -26
+                600,
+                0
             ],
             "inputs": {
                 "inputFiles": [
@@ -34,8 +34,8 @@
         "VideoSegmentationSam3Boxes_1": {
             "nodeType": "VideoSegmentationSam3Boxes",
             "position": [
-                276,
-                -58
+                200,
+                0
             ],
             "inputs": {
                 "input": "{VideoSegmentationSam3Text_1.input}",
@@ -46,8 +46,8 @@
         "VideoSegmentationSam3Text_1": {
             "nodeType": "VideoSegmentationSam3Text",
             "position": [
-                36,
-                -42
+                0,
+                0
             ],
             "inputs": {
                 "input": "{CameraInit_1.output}",
