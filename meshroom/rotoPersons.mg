@@ -40,8 +40,7 @@
             "inputs": {
                 "input": "{VideoSegmentationSam3Text_1.input}",
                 "bboxesFolder": "{VideoSegmentationSam3Text_1.output}",
-                "targetTileSize": 252,
-                "useOnlyHighPowerGpu": "{VideoSegmentationSam3Text_1.useOnlyHighPowerGpu}"
+                "targetTileSize": 252
             }
         },
         "VideoSegmentationSam3Text_1": {

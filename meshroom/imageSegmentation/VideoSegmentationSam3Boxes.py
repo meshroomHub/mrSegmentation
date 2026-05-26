@@ -416,7 +416,7 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
                         chunk_tiles_tmp = bboxUtils.tile_chunk(frame_chunk, chunk.node.targetTileSize.value,
                                                                chunk.node.minimalOverlap.value,
                                                                chunk.node.maximalNumberOfTilesPerDimension.value, sourceInfo["PAR"],
-                                                               chunk.node.roundCropSize.value, logger)
+                                                               chunk.node.forceSquaredBoxes.value and chunk.node.roundCropSize.value, logger)
                         for chunk_tile in chunk_tiles_tmp:
                             chunk_tiles.append(chunk_tile)
 
