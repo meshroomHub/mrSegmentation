@@ -1,4 +1,5 @@
 import json
+import math
 from dataclasses import dataclass, field
 
 SIZE_THRESHOLDS = [252, 504, 1008]
@@ -80,28 +81,36 @@ def merge_boxes(box1: list, box2: list, iou_threshold: float = 0.5) -> tuple[lis
         return box1, f"forward     (IoU={iou:.2f} < threshold={iou_threshold})"
 
 
-def get_target_size(boxes: dict, par: float, roundSize: bool = True):
+def get_target_size(boxes: dict, par: float, roundSize: bool = True, squareBox: bool = True, extension_factor: float = 1.0):
     """
     Compute the target size for a set of boxes.
     Comparisons occur in the display space (with pixel aspect ratio applied)).
     """
-    max_size = 0
+    max_size_w = 0
+    max_size_h = 0
     for box in boxes.values():
         display_box = box_to_display(box, par)
         x1, y1, x2, y2 = display_box
         w = x2 - x1
         h = y2 - y1
-        max_size = max(max_size, w, h)
+        max_size_w = max(max_size_w, w)
+        max_size_h = max(max_size_h, h)
 
-    if roundSize:
-        for threshold in SIZE_THRESHOLDS :
-            if max_size < threshold:
-                return threshold
+    max_size_w = int(extension_factor * max_size_w)
+    max_size_h = int(extension_factor * max_size_h)
 
-    return max_size
+    if squareBox:
+        max_size_w = max(max_size_w, max_size_h)
+        max_size_h = max_size_w
+        if roundSize:
+            for threshold in SIZE_THRESHOLDS :
+                if max_size_w < threshold and max_size_h < threshold:
+                    return threshold, threshold
+
+    return max_size_w, max_size_h
 
 
-def expand_box(box: list, target_size: int, par: float, frame_w: int, frame_h: int) -> list:
+def expand_box(box: list, target_size_w: int, target_size_h: int, par: float, frame_w: int, frame_h: int) -> list:
     """
     Expand a box at target_size x target_size in display space,
     and convert back in source space.
@@ -116,10 +125,10 @@ def expand_box(box: list, target_size: int, par: float, frame_w: int, frame_h: i
     cy = (y1 + y2) / 2
 
     # Centered expansion in display space
-    new_x1 = cx - target_size / 2
-    new_y1 = cy - target_size / 2
-    new_x2 = cx + target_size / 2
-    new_y2 = cy + target_size / 2
+    new_x1 = cx - target_size_w / 2
+    new_y1 = cy - target_size_h / 2
+    new_x2 = cx + target_size_w / 2
+    new_y2 = cy + target_size_h / 2
 
     # Horizontal adjust
     if new_x1 < 0:
@@ -181,6 +190,8 @@ def extract_tracking(
     x2_ok         : bool = True,
     x4_ok         : bool = True,
     roundCrop     : bool = True,
+    squareBox     : bool = True,
+    exp_factor    : float = 1.0,
     par           : float = 1.0,
     iou_threshold : float = 0.5
 ) -> dict:
@@ -240,17 +251,19 @@ def extract_tracking(
                 raw_boxes[int(frame_idx)] = box
 
             # --- compute target size ---
-            target_size = get_target_size(raw_boxes, par, roundCrop)
+            target_size_w, target_size_h = get_target_size(raw_boxes, par, roundCrop, squareBox, exp_factor)
 
             # --- Expand boxes in display space ---
             expanded_boxes = {}
             for frame_idx, box in raw_boxes.items():
-                if target_size is not None:
-                    if target_size < SIZE_THRESHOLDS[1] and not x4_ok and roundCrop:
-                        target_size = SIZE_THRESHOLDS[1]
-                    if target_size < SIZE_THRESHOLDS[2] and not x2_ok and roundCrop:
-                        target_size = SIZE_THRESHOLDS[2]
-                    expanded = expand_box(box, target_size, par, frame_w, frame_h)
+                if target_size_w is not None:
+                    if target_size_w < SIZE_THRESHOLDS[1] and target_size_h < SIZE_THRESHOLDS[1] and not x4_ok and roundCrop:
+                        target_size_w = SIZE_THRESHOLDS[1]
+                        target_size_h = SIZE_THRESHOLDS[1]
+                    if target_size_w < SIZE_THRESHOLDS[2] and target_size_h < SIZE_THRESHOLDS[2] and not x2_ok and roundCrop:
+                        target_size_w = SIZE_THRESHOLDS[2]
+                        target_size_h = SIZE_THRESHOLDS[2]
+                    expanded = expand_box(box, target_size_w, target_size_h, par, frame_w, frame_h)
                     expanded_boxes[frame_idx] = expanded
                 else:
                     expanded_boxes[frame_idx] = box
@@ -263,7 +276,7 @@ def extract_tracking(
     return result
 
 
-def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: float, logger) -> list[TrackChunk]:
+def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, max_tile_number_per_dimension: int, par: float, fitSam3: bool, logger) -> list[TrackChunk]:
     """
     Tile a chunk of consecutive frames by creating a set of chunks.
     One chunk on the same consecutive frames for every tiles.
@@ -273,12 +286,28 @@ def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, par: fl
     box_w = x2 - x1
     box_h = y2 - y1
 
+    squareBox = (box_w == box_h)
+
     logger.info(f"Boxes size {box_w}x{box_h}")
 
-    tile_nb_w = (box_w // targetTileSize) + 1
-    tile_nb_h = (box_h // targetTileSize) + 1
-    tile_size_w = min(targetTileSize, box_w)
-    tile_size_h = min(targetTileSize, box_h)
+    tile_size_w_min = math.ceil((box_w + (max_tile_number_per_dimension - 1) * min_overlap) / max_tile_number_per_dimension)
+    tile_size_h_min = math.ceil((box_h + (max_tile_number_per_dimension - 1) * min_overlap) / max_tile_number_per_dimension)
+    tile_size_w = min(max(targetTileSize, tile_size_w_min), box_w)
+    tile_size_h = min(max(targetTileSize, tile_size_h_min), box_h)
+
+    if squareBox and fitSam3:
+        if tile_size_w < SIZE_THRESHOLDS[0] and SIZE_THRESHOLDS[0] < box_w:
+            tile_size_w = SIZE_THRESHOLDS[0]
+            tile_size_h = SIZE_THRESHOLDS[0]
+        elif tile_size_w < SIZE_THRESHOLDS[1] and SIZE_THRESHOLDS[1] < box_w:
+            tile_size_w = SIZE_THRESHOLDS[1]
+            tile_size_h = SIZE_THRESHOLDS[1]
+        elif tile_size_w < SIZE_THRESHOLDS[2] and SIZE_THRESHOLDS[2] < box_w:
+            tile_size_w = SIZE_THRESHOLDS[2]
+            tile_size_h = SIZE_THRESHOLDS[2]
+
+    tile_nb_w = (box_w // tile_size_w) + 1
+    tile_nb_h = (box_h // tile_size_h) + 1
     overlap_w = 0
     overlap_h = 0
     start_cols = [0]
