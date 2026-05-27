@@ -320,6 +320,14 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             value="{nodeCacheFolder}",
         ),
         desc.File(
+            name="masksWithoutTiling",
+            label="Masks Without Tiling",
+            description="Generated segmentation masks computed without tiling.",
+            semantic="image",
+            value=lambda attr: "{nodeCacheFolder}/noTiling_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
+            enabled=lambda node: node.enableTiling.value,
+        ),
+        desc.File(
             name="masks",
             label="Masks",
             description="Generated segmentation masks.",
@@ -622,6 +630,21 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
 
                 image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
                                  sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
+
+                if chunk.node.enableTiling.value:
+                    m = full_rough_mask_images[image_path[2]][:,:,0:1] > 0
+                    if chunk.node.maskInvert.value:
+                        mask = np.ones_like(full_mask_images[image_path[2]])
+                        mask[m[:, :, 0]] = [0, 0, 0]
+                    else:
+                        mask = np.zeros_like(full_mask_images[image_path[2]])
+                        mask[m[:, :, 0]] = [1.0, 1.0, 1.0]
+                    if chunk.node.keepFilename.value:
+                        outputFileMask = os.path.join(chunk.node.output.value, "noTiling_" + Path(image_path[0]).stem + "." + chunk.node.extensionOut.value)
+                    else:
+                        outputFileMask = os.path.join(chunk.node.output.value, "noTiling_" + str(image_path[1]) + "." + chunk.node.extensionOut.value)
+                    image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
+                                    sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
 
         finally:
             torch.cuda.empty_cache()
