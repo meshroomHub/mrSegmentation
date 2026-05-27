@@ -13,6 +13,7 @@ logger = logging.getLogger("VideoSegmentationSam3Boxes")
 class VideoSegmentationSam3Boxes(desc.Node):
     size = avpar.DynamicViewsSize("input")
     gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
+    _cuda_tag = "cuda24G"
 
     category = "Segmentation"
     documentation = """
