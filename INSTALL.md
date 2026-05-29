@@ -11,6 +11,7 @@ It is recommended to install the dependencies of mrSegmentation through a virtua
 
 > [!NOTE]  
 > By default, some of the dependencies in the `requirements.txt` file install a CPU-only version of PyTorch. The plugin will run smoothly on the CPU, but for better performances, it is advised to install the GPU-enabled version of PyTorch.
+> The optional `torch-requirements.txt` file installs PyTorch with CUDA 12.8 support, which is required for NVIDIA RTX 50-series GPUs.
 
 - On Linux:
 ```
