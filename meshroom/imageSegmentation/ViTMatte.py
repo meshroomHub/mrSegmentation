@@ -19,8 +19,33 @@ class ViTMatte(desc.Node):
 
     category = "Matting"
     documentation = """
-Based on the SDMatte matting network, the node generates a matte from a binary mask.
-The input binary mask is converted to a trimap before feeding the matting model
+This module implements a Meshroom matting node based on the ViTMatte
+(Vision Transformer Matting) network. It generates high-quality alpha
+mattes from images using either binary masks or trimaps as input prompts.
+
+The general processing pipeline is:
+-----------------------------------
+- 1. Load SfM data and associated masks/trimaps
+- 2. If a binary mask is provided, convert it to a trimap via Gaussian blur or morphological operations
+- 3. For each detected object (bounding box), crop the region of interest
+- 4. Resize the region if it exceeds the maximum inference size
+- 5. Run ViTMatte inference to generate the alpha matte
+- 6. Save the output mattes and trimaps
+
+Available Models:
+-----------------
+- Comp1k-Large:  ViTMatte_B_Com  ; Trained on Composition-1k
+- Comp1k-Small:  ViTMatte_S_Com  ; Lightweight version
+- Dist646-Large: ViTMatte_B_DIS  ; Trained on Distinctions-646
+- Dist646-Small: ViTMatte_S_DIS  ; Lightweight version
+
+Known Limitations:
+------------------
+- Requires a SfMData file (.sfm or .abc) as input.
+- Either a mask or a trimap must be provided, but not both simultaneously.
+- If no trimap transition region (value 0.5) is found in a bounding box,
+  processing stops with an error for that frame.
+
 """
 
     inputs = [
@@ -68,10 +93,24 @@ The input binary mask is converted to a trimap before feeding the matting model
             range=(3,1000,1),
         ),
         desc.ChoiceParam(
+            name="vitMatteModel",
+            label="ViTMatte Model",
+            description="Model for inference",
+            value="Dist646",
+            values=["Comp1k", "Dist646"],
+            exclusive=True,
+        ),
+        desc.BoolParam(
+            name="highDetail",
+            label="High Detail",
+            description="Use large model if enabled.",
+            value=True,
+        ),
+        desc.ChoiceParam(
             name="inferenceSize",
-            label="Inference Size",
-            description="Image size for inference",
-            value=512,
+            label="Inference Size Max",
+            description="Maximum size of the largest image dimension for inference. Automatic resize if higher.",
+            value=1024,
             values=[512, 640, 768, 896, 1024, 2048],
             exclusive=True,
         ),
@@ -160,7 +199,7 @@ The input binary mask is converted to a trimap before feeding the matting model
 
         return paths
 
-    def build_ViTMatte_model(self, device):
+    def build_ViTMatte_model(self, checkpointPath, device):
 
         if device not in ["cuda", "cpu"]:
             return None
@@ -170,20 +209,20 @@ The input binary mask is converted to a trimap before feeding the matting model
 
         config = os.getenv("VITMATTE_CONFIG_PATH") + '/common/model.py'
         cfg = LazyConfig.load(config)
-        cfg.model.backbone.embed_dim = 768
-        cfg.model.backbone.num_heads = 12
-        cfg.model.decoder.in_chans = 768
+        if checkpointPath.find("_B_") != -1:
+            cfg.model.backbone.embed_dim = 768
+            cfg.model.backbone.num_heads = 12
+            cfg.model.decoder.in_chans = 768
         model = instantiate(cfg.model)
         model.to(device)
         model.eval()
-        checkpoint = os.getenv("VITMATTE_MODELS_PATH") + "/ViTMatte_B_Com.pth"
-        DetectionCheckpointer(model).load(checkpoint)
+        DetectionCheckpointer(model).load(checkpointPath)
 
         return model
 
 
     def processChunk(self, chunk):
-        from segmentationRDS import image
+        from segmentationRDS import image, bboxUtils
 
         from torchvision.transforms import functional as F
         import cv2
@@ -191,6 +230,7 @@ The input binary mask is converted to a trimap before feeding the matting model
         import numpy as np
         import torch
         from pyalicevision import image as avimg
+        import OpenImageIO as oiio
 
         try:
             logger.setLevel(chunk.node.verboseLevel.value.upper())
@@ -212,6 +252,9 @@ The input binary mask is converted to a trimap before feeding the matting model
                 pathMask = chunk.node.inputTrimap.value
                 promptType = "trimap"
 
+            modelInfo= {"Comp1k": {True: "ViTMatte_B_Com.pth", False: "ViTMatte_S_Com.pth"},
+                        "Dist646": {True: "ViTMatte_B_DIS.pth", False: "ViTMatte_S_DIS.pth"}}
+
             outFiles = self.resolvedPaths(chunk.node.input.value,
                                           pathMask, chunk.node.extensionMask.value,
                                           chunk.node.output.value, chunk.node.keepFilename.value,
@@ -227,14 +270,17 @@ The input binary mask is converted to a trimap before feeding the matting model
 
                 device = "cuda" if torch.cuda.is_available() and chunk.node.useGpu.value else "cpu"
 
-                model = self.build_ViTMatte_model(device)
+                checkpointPath = os.getenv("VITMATTE_MODELS_PATH") + "/" + modelInfo[chunk.node.vitMatteModel.value][chunk.node.highDetail.value]
+
+                model = self.build_ViTMatte_model(checkpointPath, device)
 
                 if model is None:
                     raise ValueError("SDMatte model cannot be loaded")
 
                 metadata_deep_model = {}
                 metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "ViTMatte"
-                metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "B_Com"
+                metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = chunk.node.vitMatteModel.value
+                metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] += "-Large" if chunk.node.highDetail.value else "-Small"
 
                 sz = int(chunk.node.inferenceSize.value)
 
@@ -244,48 +290,110 @@ The input binary mask is converted to a trimap before feeding the matting model
                         img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
                         frameId = oFile[1]
                         viewId = oFile[2]
-
+                        oiioImgBuf = oiio.ImageBuf(oFile[3])
+                        metadata = oiioImgBuf.spec().extra_attribs
+                        boxes = {}
+                        for m in metadata:
+                            if not m.name.startswith("Meshroom:mrSegmentation:"):
+                                continue
+                            underscore_pos = m.name.rfind("_")
+                            if underscore_pos == -1:
+                                continue
+                            suffix = m.name[underscore_pos + 1:]
+                            if len(suffix) >= 1 and suffix.isdigit():
+                                boxes[m.name] = [int(v) for v in m.value.split(';')]
                         logger.info("frameId: {} - {}".format(frameId, iFile))
-
-                        if w_ori > h_ori and w_ori > sz:
-                            inference_size = (sz, int(sz * h_ori / w_ori))
-                        elif h_ori > w_ori and h_ori > sz:
-                            inference_size = (int(sz * w_ori / h_ori), sz)
-                        elif w_ori == h_ori and w_ori > sz:
-                            inference_size = (sz, sz)
-                        img_sized = cv2.resize(img, inference_size, interpolation=cv2.INTER_LINEAR)
-                        img_tensor = F.to_tensor(img_sized).unsqueeze(0)
-
-                        sample = {"image": img_tensor}
+                        logger.info(f"boxes: {boxes}")
 
                         promptRGB, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(oFile[3], True)
-                        promptRGB_sized = cv2.resize(promptRGB, inference_size, interpolation=cv2.INTER_NEAREST)
-                        if promptType == "trimap":
-                            trimap = promptRGB_sized[:, :, 0]
-                        else:
-                            kernel_size = chunk.node.kernelSize.value
-                            trimap = np.full(promptRGB_sized.shape, 0.5, dtype=np.float32)
-                            if chunk.node.trimapComputationMethod.value == "Blur":
-                                blurred_mask = cv2.GaussianBlur(promptRGB_sized, (kernel_size, kernel_size), 0)
-                                threshold_low = 0.05
-                                threshold_high = 0.95
-                                trimap[blurred_mask >= threshold_high] = 1.0
-                                trimap[blurred_mask <= threshold_low] = 0.0
+
+                        matteRGB = np.zeros_like(img)
+                        fullTrimap = np.zeros_like(img)
+
+                        for key, box in boxes.items():
+                            x1, y1, x2, y2 = bboxUtils.box_to_display(box, PAR)
+                            mask_box = np.zeros_like(promptRGB)
+                            mask_box[y1:y2, x1:x2, :] = promptRGB[y1:y2, x1:x2, :]
+                            if promptType == "trimap":
+                                trimap_box = mask_box[:, :, 0]
                             else:
-                                kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
-                                mask_dilate = cv2.dilate(promptRGB_sized, kernel, iterations=1)
-                                mask_erode = cv2.erode(promptRGB_sized, kernel, iterations=1)
-                                trimap[mask_erode > 0.0] = 1.0
-                                trimap[mask_dilate == 0.0] = 0.0
+                                kernel_size = chunk.node.kernelSize.value
+                                trimap_box = np.full(promptRGB.shape, 0.5, dtype=np.float32)
+                                if chunk.node.trimapComputationMethod.value == "Blur":
+                                    blurred_mask = cv2.GaussianBlur(mask_box, (kernel_size, kernel_size), 0)
+                                    threshold_low = 0.05
+                                    threshold_high = 0.95
+                                    trimap_box[blurred_mask >= threshold_high] = 1.0
+                                    trimap_box[blurred_mask <= threshold_low] = 0.0
+                                else:
+                                    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
+                                    mask_dilate = cv2.dilate(mask_box, kernel, iterations=1)
+                                    mask_erode = cv2.erode(mask_box, kernel, iterations=1)
+                                    trimap_box[mask_erode > 0.0] = 1.0
+                                    trimap_box[mask_dilate == 0.0] = 0.0
+                                trimap_box = trimap_box[:, :, 0]
 
-                        sample["trimap"] = F.to_tensor(trimap[:, :, 0]).unsqueeze(0)
+                            coords = np.argwhere(trimap_box == 0.5)
+                            if len(coords) == 0:
+                                logger.error(f"No trimap in box {(x1, y1, x2, y2)} af frame {frameId}")
+                                return
 
-                        with torch.no_grad():
-                            matte = model(sample)['phas'].flatten(0, 2)
-                            matte = cv2.resize(matte.detach().cpu().numpy(), (w_ori, h_ori))
-                            # pred = model(sample)
-                            # matte = pred.flatten(0, 2)
-                            matteRGB = np.dstack([matte, matte, matte])
+                            ys = coords[:, 0]
+                            xs = coords[:, 1]
+                            x_left = xs.min()
+                            x_right = xs.max() + 1
+                            y_top = ys.min()
+                            y_bottom = ys.max() + 1
+                            x_center = int((x_right + x_left) / 2)
+                            y_center = int((y_top + y_bottom) / 2)
+                            width = x_right - x_left
+                            height = y_bottom - y_top
+
+                            trimap_ext = 1.1
+                            mask_height, mask_width, _ = promptRGB.shape
+                            x_left_inference = max(0, x_center - int(trimap_ext * width / 2.0))
+                            x_right_inference = min(mask_width, x_center + int(trimap_ext * width / 2.0))
+                            y_top_inference = max(0, y_center - int(trimap_ext * height / 2.0))
+                            y_bottom_inference = min(mask_height, y_center + int(trimap_ext * height / 2.0))
+                            top_left_xy     = (x_left_inference, y_top_inference)
+                            bottom_right_xy = (x_right_inference, y_bottom_inference)
+
+                            w_inference = x_right_inference - x_left_inference
+                            h_inference = y_bottom_inference - y_top_inference
+
+                            logger.debug(f"box for inference : [{top_left_xy}, {bottom_right_xy}] ; ({w_inference} x {h_inference})")
+
+                            img_for_inference = img[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :]
+                            trimap_for_inference = trimap_box[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference]
+
+                            if w_inference > h_inference and w_inference > sz:
+                                inference_size = (sz, int(sz * h_inference / w_inference))
+                            elif h_inference > w_inference and h_inference > sz:
+                                inference_size = (int(sz * w_inference / h_inference), sz)
+                            elif w_inference == h_inference and w_inference > sz:
+                                inference_size = (sz, sz)
+                            else:
+                                inference_size = (w_inference, h_inference)
+
+                            logger.debug(f"inference size : {inference_size} ; ratio = {inference_size[0] / w_inference}")
+
+                            img_sized = cv2.resize(img_for_inference, inference_size, interpolation=cv2.INTER_LINEAR)
+                            sample = {"image": F.to_tensor(img_sized).unsqueeze(0)}
+                            box_trimap = cv2.resize(trimap_for_inference, inference_size, interpolation=cv2.INTER_NEAREST)
+                            sample["trimap"] = F.to_tensor(box_trimap).unsqueeze(0)
+
+                            with torch.no_grad():
+                                matte = model(sample)['phas'].flatten(0, 2)
+                                matte = cv2.resize(matte.detach().cpu().numpy(), (w_inference, h_inference))
+                                box_matteRGB = np.dstack([matte, matte, matte])
+                                box_matteRGB = cv2.resize(box_matteRGB, (w_inference, h_inference), interpolation=cv2.INTER_LINEAR)
+                                matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = box_matteRGB
+
+                            trimap_for_inference = np.dstack([trimap_for_inference, trimap_for_inference, trimap_for_inference])
+                            fullTrimap[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = trimap_for_inference
+
+                            metadata_deep_model[key] = str(x_left_inference) + ";" + str(y_top_inference) + ";"
+                            metadata_deep_model[key] += str(x_right_inference) + ";" + str(y_bottom_inference)
 
                         optWrite = avimg.ImageWriteOptions()
                         if Path(oFile[0]).suffix.lower() == ".exr":
@@ -297,7 +405,7 @@ The input binary mask is converted to a trimap before feeding the matting model
 
                         image.writeImage(oFile[0], matteRGB, h_ori, w_ori, orientation, PAR, metadata_deep_model, optWrite)
                         if promptType == "mask":
-                            image.writeImage(oFile[4], trimap, h_ori, w_ori, orientation, PAR, metadata_deep_model, optWrite)
+                            image.writeImage(oFile[4], fullTrimap, h_ori, w_ori, orientation, PAR, metadata_deep_model, optWrite)
 
         finally:
             torch.cuda.empty_cache()
