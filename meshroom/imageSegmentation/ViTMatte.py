@@ -207,7 +207,10 @@ Known Limitations:
         from detectron2.config import LazyConfig, instantiate
         from detectron2.checkpoint import DetectionCheckpointer
 
-        config = os.getenv("VITMATTE_CONFIG_PATH") + '/common/model.py'
+        config_root = os.getenv("VITMATTE_CONFIG_PATH")
+        if not config_root:
+            raise ValueError("VITMATTE_CONFIG_PATH env var is not defined.")
+        config = os.path.join(config_root, "common", "model.py")
         cfg = LazyConfig.load(config)
         if checkpointPath.find("_B_") != -1:
             cfg.model.backbone.embed_dim = 768
@@ -275,12 +278,12 @@ Known Limitations:
                 model = self.build_ViTMatte_model(checkpointPath, device)
 
                 if model is None:
-                    raise ValueError("SDMatte model cannot be loaded")
+                    raise ValueError("ViTMatte model cannot be loaded")
 
-                metadata_deep_model = {}
-                metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "ViTMatte"
-                metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = chunk.node.vitMatteModel.value
-                metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] += "-Large" if chunk.node.highDetail.value else "-Small"
+                metadata_deep_model_base = {
+                "Meshroom:mrSegmentation:DeepModelName": "ViTMatte",
+                "Meshroom:mrSegmentation:DeepModelVersion": chunk.node.vitMatteModel.value + "-Large" if chunk.node.highDetail.value else "-Small"
+                }
 
                 sz = int(chunk.node.inferenceSize.value)
 
@@ -291,6 +294,7 @@ Known Limitations:
                         frameId = oFile[1]
                         viewId = oFile[2]
                         oiioImgBuf = oiio.ImageBuf(oFile[3])
+                        metadata_deep_model = dict(metadata_deep_model_base)
                         metadata = oiioImgBuf.spec().extra_attribs
                         boxes = {}
                         for m in metadata:
@@ -320,6 +324,8 @@ Known Limitations:
                                 kernel_size = chunk.node.kernelSize.value
                                 trimap_box = np.full(promptRGB.shape, 0.5, dtype=np.float32)
                                 if chunk.node.trimapComputationMethod.value == "Blur":
+                                    if kernel_size % 2 == 0:
+                                        kernel_size += 1
                                     blurred_mask = cv2.GaussianBlur(mask_box, (kernel_size, kernel_size), 0)
                                     threshold_low = 0.05
                                     threshold_high = 0.95
@@ -335,7 +341,7 @@ Known Limitations:
 
                             coords = np.argwhere(trimap_box == 0.5)
                             if len(coords) == 0:
-                                logger.error(f"No trimap in box {(x1, y1, x2, y2)} af frame {frameId}")
+                                logger.warning(f"No trimap in box {(x1, y1, x2, y2)} af frame {frameId}")
                                 return
 
                             ys = coords[:, 0]
