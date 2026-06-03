@@ -403,10 +403,12 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
             logger.debug(f"bboxes.keys() = {bboxes.keys()}")
 
             full_mask_images = {}
+            full_rough_mask_images = {}
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
             sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": p_a_r, "orientation": orientation}
             for frameId, image_path in enumerate(chunk_image_paths):
                 full_mask_images[image_path[2]] = np.zeros_like(img)
+                full_rough_mask_images[image_path[2]] = np.zeros_like(img)
 
             for key, frame_chunks in bboxes.items():
 
@@ -431,14 +433,12 @@ Bounding box metadata is embedded in each output file under the `Meshroom:mrSegm
 
                     # In tiling mode, avoid loading all frames for every new tiles
                     full_pil_images = {}
-                    full_rough_mask_images = {}
                     if chunk.node.enableTiling.value and len(chunk_tiles) > 1:
                         pil_images = []
                         for frameId, box in chunk_tiles[0].boxes.items():
                             if not chunk.node.computeOnFirstFrameOnly.value or frameId == chunk_image_paths[0][2]:
                                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
                                 full_pil_images[frameId] = img
-                                full_rough_mask_images[frameId] = np.zeros_like(img)
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                 imgBuf = oiio.ImageBuf(img)
                                 imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
