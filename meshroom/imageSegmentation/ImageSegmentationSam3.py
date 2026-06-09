@@ -296,6 +296,11 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
                 os.mkdir(chunk.node.output.value)
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
+            # SAM3 weights are bfloat16: inference must run under autocast (+ inference_mode),
+            # otherwise a "BFloat16 vs Float" dtype mismatch is raised. See official examples.
+            if device == "cuda":
+                torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
+            torch.inference_mode().__enter__()
             model = build_sam3_image_model(checkpoint_path=chunk.node.segmentationModelPath.evalValue, device=device)
             processor = Sam3Processor(model)
 
