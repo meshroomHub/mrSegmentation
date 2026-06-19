@@ -225,6 +225,7 @@ class VideoMaMa(desc.Node):
         import torch
         from pyalicevision import image as avimg
         import OpenImageIO as oiio
+        import copy
 
         try:
             logger.setLevel(chunk.node.verboseLevel.value.upper())
@@ -311,8 +312,6 @@ class VideoMaMa(desc.Node):
                     cond_frames = []
                     mask_frames = []
                     for slice_idx, (slice_start, slice_end) in enumerate(time_slices):
-                        # startFrameId = firstFrameId + slice_start
-                        # stopFrameId = firstFrameId + slice_end
                         startFrameId = frame_chunk.start_frame + slice_start
                         stopFrameId = frame_chunk.start_frame + slice_end
                         logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{startFrameId}, {stopFrameId}[")
@@ -322,7 +321,6 @@ class VideoMaMa(desc.Node):
                             startFrameId += overlap
                         for frameId, box in frame_chunk.boxes.items():
                             if frameId >= startFrameId and frameId < stopFrameId:
-                                #img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
                                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - frame_chunk.start_frame][0]), True)
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                 imgBuf = oiio.ImageBuf(img)
@@ -330,7 +328,6 @@ class VideoMaMa(desc.Node):
                                 img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
                                 frame = self._resize_image(img_crop, max(chunk.node.inferenceSize.value, 2160))
                                 resized_h, resized_w = frame.shape[:2]
-                                #mask_path = str(chunk_image_paths[frameId - firstFrameId][1])
                                 mask_path = str(chunk_image_paths[frameId - frame_chunk.start_frame][1])
                                 mask, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(mask_path, True)
                                 imgBuf = oiio.ImageBuf(mask)
@@ -349,8 +346,6 @@ class VideoMaMa(desc.Node):
                             logger.error(f"Error in VideoMaMa inference at slice {slice_idx}: {ex}")
                             raise
 
-                        if len(output_frames) >= overlap and slice_idx < len(time_slices) - 1:
-                            previous_frames = output_frames[-overlap:].copy()
                         if slice_idx == 0:
                             mix_frames = output_frames[0:overlap]
                         else:
@@ -359,6 +354,9 @@ class VideoMaMa(desc.Node):
                                 new_weight = (i + 1) / (overlap + 1)
                                 blended_frame = (1.0 - new_weight) * previous_frames[i] + new_weight * output_frames[i].copy()
                                 mix_frames.append(blended_frame)
+
+                        if len(output_frames) >= overlap: # and slice_idx < len(time_slices) - 1:
+                            previous_frames = copy.deepcopy(output_frames[-overlap:])
 
                         if slice_idx > 0:
                             startFrameId -= overlap
@@ -372,7 +370,7 @@ class VideoMaMa(desc.Node):
                                     x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                     box_w = x2 - x1
                                     box_h = y2 - y1
-                                    output_frame = mix_frames[frame_idx].copy() if frame_idx < overlap else output_frames[frame_idx].copy()
+                                    output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
                                     alpha = self._restore_image_size(output_frame, (box_w, box_h))
                                     full_alpha[frameId][y1:y2, x1:x2, :] = alpha
 
