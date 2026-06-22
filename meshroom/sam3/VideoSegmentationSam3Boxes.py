@@ -325,7 +325,7 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
 
             full_mask_images = {}
             full_rough_mask_images = {}
-            rough_mask_available = chunk_image_paths[0][8] is not None
+            rough_mask_available = all(p[8] is not None for p in chunk_image_paths)
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
             sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": p_a_r, "orientation": orientation}
             maskNbChannel = 3 if chunk.node.verboseLevel.value.upper() == "DEBUG" and chunk.node.drawTilesInDebug.value else 1
