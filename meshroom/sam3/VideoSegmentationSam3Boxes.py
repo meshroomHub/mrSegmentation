@@ -91,7 +91,8 @@ When **Verbose Level** is `debug` and **Draw Tiles On Mask In Debug Mode** is en
 tile borders are baked into output masks in red for visual inspection.
 
 ### Output
-Single-channel masks (white = object, black = background, or inverted).
+Single-channel masks by default (white = object, black = background, or inverted).
+In debug mode with tile drawing enabled, masks are written as 3-channels with red tile borders.
 Filenames use the original input name or the view ID depending on **Keep Filename**.
 Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace.
 """
@@ -124,8 +125,8 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
         desc.File(
             name="masksFolder",
             label="Masks Folder",
-            description="Folder containing already computed masks that can be used as rough masks in case of tiling.\n"
-                        "If unset when tiling is enabled, rough masks will be computed in every bounding boxes ",
+            description="Folder containing already-computed masks that can be used as rough masks when tiling is enabled.\n"
+                        "If unset when, rough masks will be computed for each bounding box.",
             value="",
         ),
         desc.BoolParam(
@@ -303,6 +304,7 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video-Crop"
             metadata_deep_model["Meshroom:mrSegmentation:NodeVersion"] = "sam3Boxes-" + __version__
+            metadata_deep_model["Meshroom:mrSegmentation:NodeVersion"] += "-Tiling-ON" if chunk.node.enableTiling.value else "-Tiling-OFF"
 
             # bboxes.json decoding
             json_path = os.path.join(chunk.node.bboxesFolder.value, "bboxes.json")
@@ -482,7 +484,6 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
                                         if os.path.isfile(str(chunk_image_paths[frame_idx - firstFrameId][8])):
                                             logger.info(f"read mask for frame {frame_idx} at {chunk_image_paths[frame_idx - firstFrameId][8]}")
                                             maskImg, h_mask, w_mask, PAR_mask, or_mask = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][8]), True)
-                                            x1, y1, x2, y2 = bboxUtils.box_to_display(box, PAR_mask)
                                             imgBuf = oiio.ImageBuf(maskImg)
                                             imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
                                             full_rough_mask_images[frame_idx] = np.zeros((maskImg.shape[0], maskImg.shape[1], 1), np.float32)
@@ -597,7 +598,7 @@ def get_image_paths_list(input_path, path_folder_x2 = "", path_folder_x4 = "", m
                     if os.path.isfile(os.path.join(path_folder_x4, image_x1_name)):
                         image_x4_path = os.path.join(path_folder_x4, image_x1_name)
                     mask_path = None
-                    if os.path.isfile(os.path.join(mask_folder, image_x1_name)):
+                    if mask_folder and os.path.isfile(os.path.join(mask_folder, image_x1_name)):
                         mask_path = os.path.join(mask_folder, image_x1_name)
                     intrinsic = dataAV.getIntrinsicSharedPtr(v.getIntrinsicId())
                     pinhole = camera.Pinhole.cast(intrinsic)
