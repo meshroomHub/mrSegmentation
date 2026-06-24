@@ -1,7 +1,5 @@
 __version__ = "1.0"
 
-from distutils.log import error
-from functools import total_ordering
 import os
 from pathlib import Path
 
@@ -18,7 +16,6 @@ class VideoMaMa(desc.Node):
 """
     size = avpar.DynamicViewsSize("input")
     gpu = lambda node: desc.Level.EXTREME if node.inferenceSize.value == 2048 else desc.Level.INTENSIVE
-    _cuda_tag = "cuda24G"
 
     category = "Matting"
 
@@ -117,12 +114,6 @@ class VideoMaMa(desc.Node):
         ),
     ]
 
-    def onInferenceSizeChanged(self, node):
-        if node.inferenceSize.value < 2048:
-            _cuda_tag = "cuda24G"
-        else:
-            _cuda_tag = ""
-
     def _resolve_paths(self, pathIn, pathMask, extMask, outDir, keepFilename, extOut):
         from pyalicevision import sfmData, camera
         from pyalicevision import sfmDataIO
@@ -163,28 +154,45 @@ class VideoMaMa(desc.Node):
 
         return paths
 
+    def _padx8_image(self, image):
+        import numpy as np
+
+        h, w = image.shape[:2]
+        new_h = (h + 7) // 8 * 8
+        new_w = (w + 7) // 8 * 8
+        pad_h = new_h - h
+        pad_w = new_w - w
+        if pad_h == 0 and pad_w == 0:
+            return image
+        if image.ndim == 2:
+            return np.pad(image, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
+        else:
+            return np.pad(image, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant', constant_values=0)
+
     def _resize_image(self, image, max_size):
-        """Resize image and ensure dimensions are multiples of 8 for the model."""
         import cv2
 
         h, w = image.shape[:2]
-        
         scale = 1.0
         if max_size > 0:
             max_side = max(h, w)
             if max_side > max_size:
                 scale = max_size / max_side
 
-        new_h = (int(h * scale) // 8) * 8
-        new_w = (int(w * scale) // 8) * 8
-        
-        return cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+        if scale < 1.0:
+            new_h = (int(h * scale) // 8) * 8
+            new_w = (int(w * scale) // 8) * 8
+            return "resize", cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
 
-    def _restore_image_size(self, image, original_size):
-        """Restore image to original size. original_size must be (w, h) as expected by cv2."""
+        return "pad", self._padx8_image(image)
+
+    def _restore_image_size(self, image, original_size, method):
         import cv2
         original_w, original_h = original_size
-        restored_image = cv2.resize(image, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
+        if method == "resize":
+            restored_image = cv2.resize(image, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
+        else:
+            restored_image = image[0:original_h, 0:original_w, :]
         return restored_image
 
     def _generate_time_slices(self, total_frames, batch_size, overlap):
@@ -259,7 +267,7 @@ class VideoMaMa(desc.Node):
                     enable_vae_tiling=False,        # Tiling VAE is not worth it
                     enable_vae_slicing=True,        # Process VAE one image at a time
                 )
-                print(f"Loaded videoMaMa model to {device}") # with max size {max_size}, overlap={overlap}, batch={batch_size}, and combined={combined}")
+                logger.info(f"Loaded videoMaMa model to {device}")
             except Exception as e:
                 raise ValueError(f"Error loading VideoMaMa pipeline: {e}")
 
@@ -326,18 +334,21 @@ class VideoMaMa(desc.Node):
                                 imgBuf = oiio.ImageBuf(img)
                                 imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
-                                frame = self._resize_image(img_crop, max(chunk.node.inferenceSize.value, 2160))
+                                method, frame = self._resize_image(img_crop, chunk.node.inferenceSize.value)
                                 resized_h, resized_w = frame.shape[:2]
                                 mask_path = str(chunk_image_paths[frameId - frame_chunk.start_frame][1])
                                 mask, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(mask_path, True)
                                 imgBuf = oiio.ImageBuf(mask)
                                 imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
-                                mask = cv2.resize(img_crop, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST)
+                                if method == "resize":
+                                    mask = cv2.resize(img_crop, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST)
+                                else:
+                                    mask = self._padx8_image(img_crop)
                                 cond_frames.append(frame)
                                 mask_frames.append(mask)
                         nb, sh = self._check_lists_compatibility(cond_frames, mask_frames)
-                        logger.info(f"slice_idx = {slice_idx} ; {nb} frames ; shape = {sh}")
+                        logger.info(f"slice_idx = {slice_idx} ; {nb} frames ; shape = {sh} ; method = {method}")
 
                         try:
                             with torch.amp.autocast('cuda', enabled=False):
@@ -355,7 +366,7 @@ class VideoMaMa(desc.Node):
                                 blended_frame = (1.0 - new_weight) * previous_frames[i] + new_weight * output_frames[i].copy()
                                 mix_frames.append(blended_frame)
 
-                        if len(output_frames) >= overlap: # and slice_idx < len(time_slices) - 1:
+                        if len(output_frames) >= overlap:
                             previous_frames = copy.deepcopy(output_frames[-overlap:])
 
                         if slice_idx > 0:
@@ -371,8 +382,8 @@ class VideoMaMa(desc.Node):
                                     box_w = x2 - x1
                                     box_h = y2 - y1
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
-                                    alpha = self._restore_image_size(output_frame, (box_w, box_h))
-                                    full_alpha[frameId][y1:y2, x1:x2, :] = alpha
+                                    alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
+                                    full_alpha[frameId][y1:y2, x1:x2, :] = np.maximum(alpha, full_alpha[frameId][y1:y2, x1:x2, :])
 
             for key, frame_chunks in bboxes_metadata.items():
                 if "_" in key:
