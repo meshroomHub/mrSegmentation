@@ -96,14 +96,6 @@ In order to associate a point to a given submask, it must be colored with the su
             values=["exr", "png", "jpg"],
             exclusive=True,
         ),
-        desc.ChoiceParam(
-            name="verboseLevel",
-            label="Verbose Level",
-            description="Verbosity level (fatal, error, warning, info, debug).",
-            value="info",
-            values=VERBOSE_LEVEL,
-            exclusive=True,
-        ),
         desc.ShapeList(
             name="positiveClicks",
             label="Positive Clicks",
@@ -134,6 +126,14 @@ In order to associate a point to a given submask, it must be colored with the su
             description="Single bounding box used as initial prompt.",
             keyable=True,
             keyType="viewId"
+        ),
+        desc.ChoiceParam(
+            name="verboseLevel",
+            label="Verbose Level",
+            description="Verbosity level (fatal, error, warning, info, debug).",
+            value="info",
+            values=VERBOSE_LEVEL,
+            exclusive=True,
         ),
     ]
 
@@ -273,7 +273,7 @@ In order to associate a point to a given submask, it must be colored with the su
         return f32_val, f32_hex, hash_32
 
 
-    def preprocess(self, node):
+    def resolvePaths(self, node):
         input_path = node.input.value
         image_paths = get_image_paths_list(input_path)
         if len(image_paths) == 0:
@@ -292,6 +292,9 @@ In order to associate a point to a given submask, it must be colored with the su
         import OpenImageIO as oiio
 
         try:
+
+            self.resolvePaths(chunk.node)
+            
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
             if not chunk.node.input:

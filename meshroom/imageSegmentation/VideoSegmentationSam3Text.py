@@ -1,4 +1,4 @@
-__version__ = "1.0"
+__version__ = "1.1"
 
 import os
 from pathlib import Path
@@ -12,7 +12,7 @@ logger = logging.getLogger("VideoSegmentationSam3Text")
 
 class VideoSegmentationSam3Text(desc.Node):
     size = avpar.DynamicViewsSize("input")
-    gpu = desc.Level.EXTREME
+    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
 
     category = "Segmentation"
     documentation = """
@@ -80,9 +80,9 @@ from a text prompt.
             value=False,
         ),
         desc.BoolParam(
-            name="useGpu",
-            label="Use GPU",
-            description="Use GPU for computation if available.",
+            name="useOnlyHighPowerGpu",
+            label="Use Only High Power GPU",
+            description="Set GPU power requirement.",
             value=True,
             invalidate=False,
         ),
@@ -159,7 +159,7 @@ from a text prompt.
         ),
     ]
 
-    def preprocess(self, node):
+    def resolvePaths(self, node):
         import re
         input_path = node.input.value
         image_paths = get_image_paths_list(input_path)
@@ -186,6 +186,9 @@ from a text prompt.
         import json
 
         try:
+
+            self.resolvePaths(chunk.node)
+
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
             if not chunk.node.input:
@@ -201,7 +204,7 @@ from a text prompt.
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
-            gpus_to_use = [torch.cuda.current_device()] if chunk.node.useGpu.value else None
+            gpus_to_use = [torch.cuda.current_device()]
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
 
             metadata_deep_model = {}
@@ -251,6 +254,9 @@ from a text prompt.
             session_id = response["session_id"]
 
             boxes = {}
+            metadata_boxes = {}
+            for frameId in range(frameNumber):
+                metadata_boxes[frameId] = {}
 
             for textPrompt in self.textPrompts:
 
@@ -258,6 +264,8 @@ from a text prompt.
                 boxes[textPrompt] = {"forward": {}, "backward": {}}
                 cryptoName = "object" if textPrompt == "" else textPrompt
                 metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = textPrompt
+                for frameId in range(frameNumber):
+                    metadata_boxes[frameId][textPrompt] = {"forward": {}, "backward": {}}
 
                 video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
 
@@ -367,6 +375,9 @@ from a text prompt.
 
                             bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
                             boxes[textPrompt]["forward"][firstFrameId + frameId][key] = bbox
+                            x1, y1, x2, y2 = bbox
+                            bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
+                            metadata_boxes[frameId][textPrompt]["forward"]["fwd_" + textPrompt + "_" + str(key)] = bbox_str
 
                         if chunk.node.outputColorMasks.value:
                             if chunk.node.keepFilename.value:
@@ -412,6 +423,9 @@ from a text prompt.
                                     crypto_cov_bwd[mask] = 1.0
                                 bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
                                 boxes[textPrompt]["backward"][firstFrameId + frameId][key] = bbox
+                                x1,y1,x2,y2 = bbox
+                                bbox_str = str(x1)+";"+str(y1)+";"+str(x2)+";"+str(y2)
+                                metadata_boxes[frameId][textPrompt]["backward"]["bwd_"+textPrompt+"_"+str(key)] = bbox_str
 
                             if chunk.node.outputColorMasks.value:
                                 if chunk.node.keepFilename.value:
@@ -453,7 +467,13 @@ from a text prompt.
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
 
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                frame_metadata_deep_model = dict(metadata_deep_model)
+                for prompt in self.textPrompts:
+                    for direction in ["forward", "backward"]:
+                        for k, box in metadata_boxes[frameId][prompt][direction].items():
+                            frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
+
+                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
 
             jsonFilename = chunk.node.output.value + "/bboxes.json"
             with open(jsonFilename, "w", encoding="utf_8") as f:
