@@ -44,12 +44,35 @@ def cleanstr(s: str) -> str:
     return sclean
 
 
+def get_device(useGPU: bool) -> str:
+    if not useGPU:
+        return 'cpu'
+    if not torch.cuda.is_available():
+        print("Cannot execute on GPU, fallback to CPU execution mode")
+        return 'cpu'
+
+    device_index = torch.cuda.current_device()
+    major, minor = torch.cuda.get_device_capability(device_index)
+    device_arch = f"sm_{major}{minor}"
+    device_compute = f"compute_{major}{minor}"
+    supported_arches = torch.cuda.get_arch_list()
+    if supported_arches and device_arch not in supported_arches and device_compute not in supported_arches:
+        device_name = torch.cuda.get_device_name(device_index)
+        print(
+            f"CUDA device '{device_name}' requires {device_arch}, but this PyTorch "
+            f"build supports: {', '.join(supported_arches)}. "
+            "Fallback to CPU execution mode. For RTX 50-series GPUs, install a "
+            "PyTorch CUDA 12.8+ build."
+        )
+        return 'cpu'
+
+    return 'cuda'
+
+
 class SegmentationRDS:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, GD_CONFIG_PATH:str, GD_CHECKPOINT_PATH:str, SAM_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, SAM_ENCODER_VERSION:str='vit_h', useGPU:bool=True):
-        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
-        if self.DEVICE == 'cpu' and useGPU:
-            print("Cannot execute on GPU, fallback to CPU execution mode")
+        self.DEVICE = get_device(useGPU)
         self.RAM_IMAGE_SIZE = RAM_IMAGE_SIZE
         # Load models
         # Recognize Anything
@@ -191,9 +214,7 @@ class SegmentationRDS:
 class SegmentAnything:
 
     def __init__(self, SAM_CHECKPOINT_PATH:str, SAM_ENCODER_VERSION:str='vit_h', useGPU:bool=True):
-        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
-        if self.DEVICE == 'cpu' and useGPU:
-            print("Cannot execute on GPU, fallback to CPU execution mode")
+        self.DEVICE = get_device(useGPU)
         # Load models
         sam = sam_model_registry[SAM_ENCODER_VERSION](checkpoint=SAM_CHECKPOINT_PATH)
         sam.to(self.DEVICE)
@@ -262,9 +283,7 @@ class SegmentAnything:
 class RecognizeAnything:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
-        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
-        if self.DEVICE == 'cpu' and useGPU:
-            print("Cannot execute on GPU, fallback to CPU execution mode")
+        self.DEVICE = get_device(useGPU)
         self.RAM_IMAGE_SIZE = RAM_IMAGE_SIZE
         # Load models
         # Recognize Anything
@@ -294,9 +313,7 @@ class RecognizeAnything:
 class DetectAnything:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, GD_CONFIG_PATH:str, GD_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
-        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
-        if self.DEVICE == 'cpu' and useGPU:
-            print("Cannot execute on GPU, fallback to CPU execution mode")
+        self.DEVICE = get_device(useGPU)
         self.RAM_IMAGE_SIZE = RAM_IMAGE_SIZE
         # Load models
         # Recognize Anything
@@ -420,9 +437,7 @@ class BiRefNetSeg:
     def __init__(self, modelType:str, useGPU:bool=True):
         from birefnet.models.birefnet import BiRefNet
 
-        self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
-        if self.DEVICE == 'cpu' and useGPU:
-            print("Cannot execute on GPU, fallback to CPU execution mode")
+        self.DEVICE = get_device(useGPU)
         # Load models
         pretrainedModel = 'ZhengPeng7/BiRefNet_HR-matting'
         if modelType == 'BiRefNet LR':
