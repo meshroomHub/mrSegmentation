@@ -3,20 +3,6 @@ import numpy as np
 import torch
 import torchvision
 
-from math import sqrt
-
-# Grounding DINO
-from groundingdino.util.inference import predict
-from groundingdino.models import build_model
-from groundingdino.util.misc import clean_state_dict
-from groundingdino.util.slconfig import SLConfig
-
-# Segment Anything
-from segment_anything import build_sam, SamPredictor, sam_model_registry
-# Recognize Anything
-from ram.models import ram_plus
-from ram import inference_ram as inference
-
 
 def get_size_with_aspect_ratio(image_size: int, size: int, max_size: int = None):
     w, h = image_size
@@ -47,6 +33,14 @@ def cleanstr(s: str) -> str:
 class SegmentationRDS:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, GD_CONFIG_PATH:str, GD_CHECKPOINT_PATH:str, SAM_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, SAM_ENCODER_VERSION:str='vit_h', useGPU:bool=True):
+        from groundingdino.util.inference import predict
+        from groundingdino.models import build_model
+        from groundingdino.util.misc import clean_state_dict
+        from groundingdino.util.slconfig import SLConfig
+        from segment_anything import build_sam, SamPredictor, sam_model_registry
+        from ram.models import ram_plus
+        from ram import inference_ram as inference
+
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
         if self.DEVICE == 'cpu' and useGPU:
             print("Cannot execute on GPU, fallback to CPU execution mode")
@@ -191,6 +185,8 @@ class SegmentationRDS:
 class SegmentAnything:
 
     def __init__(self, SAM_CHECKPOINT_PATH:str, SAM_ENCODER_VERSION:str='vit_h', useGPU:bool=True):
+        from segment_anything import build_sam, SamPredictor, sam_model_registry
+
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
         if self.DEVICE == 'cpu' and useGPU:
             print("Cannot execute on GPU, fallback to CPU execution mode")
@@ -262,6 +258,8 @@ class SegmentAnything:
 class RecognizeAnything:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
+        from ram.models import ram_plus
+
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
         if self.DEVICE == 'cpu' and useGPU:
             print("Cannot execute on GPU, fallback to CPU execution mode")
@@ -279,6 +277,7 @@ class RecognizeAnything:
         del self.ram
 
     def get_tags(self, image:np.ndarray) -> list[str]:
+        from ram import inference_ram as inference
 
         ram_Transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
                                                         torchvision.transforms.Resize((self.RAM_IMAGE_SIZE, self.RAM_IMAGE_SIZE)),
@@ -294,6 +293,11 @@ class RecognizeAnything:
 class DetectAnything:
 
     def __init__(self, RAM_CHECKPOINT_PATH:str, GD_CONFIG_PATH:str, GD_CHECKPOINT_PATH:str, RAM_VIT:str='swin_l', RAM_IMAGE_SIZE:int=384, useGPU:bool=True):
+        from groundingdino.models import build_model
+        from groundingdino.util.misc import clean_state_dict
+        from groundingdino.util.slconfig import SLConfig
+        from ram.models import ram_plus
+
         self.DEVICE = 'cuda' if useGPU and torch.cuda.is_available() else 'cpu'
         if self.DEVICE == 'cpu' and useGPU:
             print("Cannot execute on GPU, fallback to CPU execution mode")
@@ -319,6 +323,7 @@ class DetectAnything:
         del self.gdm
 
     def get_tags(self, image:np.ndarray) -> list[str]:
+        from ram import inference_ram as inference
 
         ram_Transform = torchvision.transforms.Compose([torchvision.transforms.ToTensor(),
                                                         torchvision.transforms.Resize((self.RAM_IMAGE_SIZE, self.RAM_IMAGE_SIZE)),
@@ -348,6 +353,7 @@ class DetectAnything:
 
 
     def detect(self, image:np.ndarray, TEXT_PROMPT:str, BOX_THRESHOLD=0.25, TEXT_THRESHOLD=0.25, NMS_THRESHOLD=0.8):
+        from groundingdino.util.inference import predict
 
         source_h, source_w, _ = image.shape
         gd_imgSize = get_size_with_aspect_ratio((source_w, source_h), 800, max_size=1333)
@@ -442,6 +448,8 @@ class BiRefNetSeg:
         del self.brn
 
     def segment(self, image_uint8: np.ndarray, xyxy: np.ndarray) -> np.ndarray:
+        from math import sqrt
+
         max_image_size = (2048, 4096)
         input_image_size = (image_uint8.shape[0], image_uint8.shape[1])
         matte_image = np.zeros(input_image_size)
