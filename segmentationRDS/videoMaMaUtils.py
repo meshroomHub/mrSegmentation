@@ -1,71 +1,5 @@
 import numpy as np
 import torch
-import cv2
-
-from diffusers.models import AutoencoderKLTemporalDecoder, UNetSpatioTemporalConditionModel
-
-
-def apply_mask_postprocessing(mask, holes=0, dots=0, border_fix=0, grow=0):
-    """Apply postprocessing to a mask using current session settings"""
-
-    if holes > 0:
-        mask = fill_small_holes(mask, holes)
-    if dots > 0:
-        mask = remove_small_dots(mask, dots)
-    if border_fix > 0:
-        mask = apply_border_fix(mask, border_fix)
-    if grow != 0:
-        mask = grow_shrink(mask, grow)
-
-    return mask
-
-def fill_small_holes(mask, holes_value):
-    max_hole_area = holes_value ** 2
-    filled_mask = mask.copy()
-    contours, hierarchy = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
-
-    for i, contour in enumerate(contours):
-        area = cv2.contourArea(contour)
-        if area <= max_hole_area and hierarchy[0][i][3] != -1:  # Check if it's a hole (child contour)
-            cv2.drawContours(filled_mask, [contour], -1, 255, thickness=cv2.FILLED)
-
-    return filled_mask
-
-def remove_small_dots(mask, dots_value):
-    max_dot_area = dots_value ** 2
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
-
-    cleaned_mask = np.zeros_like(mask)
-    for label in range(1, num_labels):  # skip background
-        if stats[label, cv2.CC_STAT_AREA] > max_dot_area:
-            cleaned_mask[labels == label] = 255
-
-    return cleaned_mask
-
-def grow_shrink(mask, grow_value):
-    kernel = np.ones((abs(grow_value) + 1, abs(grow_value) + 1), np.uint8)
-    if grow_value > 0:
-        return cv2.dilate(mask, kernel, iterations=1)
-    elif grow_value < 0:
-        return cv2.erode(mask, kernel, iterations=1)
-    else:
-        return mask
-
-def apply_border_fix(mask, border_size):
-    if border_size == 0:
-        return mask
-    height, width = mask.shape
-    y_start = border_size
-    y_end = height - border_size
-    x_start = border_size
-    x_end = width - border_size
-    return cv2.copyMakeBorder(
-        mask[y_start:y_end, x_start:x_end],
-        border_size, border_size, border_size, border_size,
-        cv2.BORDER_REPLICATE,
-        value=None
-    )
-
 
 class VideoInferencePipeline:
     """
@@ -93,7 +27,6 @@ class VideoInferencePipeline:
             enable_vae_tiling (bool): Enable tiled VAE encoding/decoding for lower memory.
             enable_vae_slicing (bool): Enable VAE slicing to process one image at a time.
         """
-        #print("--- Initializing Inference Pipeline and Loading Models ---")
         self.device = torch.device(device)
         self.weight_dtype = weight_dtype
         self.enable_model_cpu_offload = enable_model_cpu_offload
@@ -101,6 +34,7 @@ class VideoInferencePipeline:
 
         # Load models from pretrained paths
         try:
+            from diffusers.models import AutoencoderKLTemporalDecoder, UNetSpatioTemporalConditionModel
             self.vae = AutoencoderKLTemporalDecoder.from_pretrained(base_model_path, subfolder="vae", variant="fp16")
             self.unet = UNetSpatioTemporalConditionModel.from_pretrained(unet_checkpoint_path, subfolder="unet")
         except Exception as e:
@@ -199,7 +133,7 @@ class VideoInferencePipeline:
             progress_callback: Optional callable(step, total_steps, description) for UI updates.
 
         Returns:
-            list[np.ndarray]: A list of the generated video frames as RGB uint8 arrays.
+            list[np.ndarray]: A list of the generated video frames as RGB float32 arrays in [0, 1]
         """
         def _notify(step, desc):
             """Notify progress via both pbar (ComfyUI) and callback (Sammie)"""
@@ -321,7 +255,7 @@ class VideoInferencePipeline:
             if arr.ndim == 2:
                 # Grayscale -> replicate to 3 channels
                 arr = np.stack([arr] * 3, axis=-1)
-            t = torch.from_numpy(arr.copy()).permute(2, 0, 1).float() # / 255.0  # (3, H, W) in [0, 1]
+            t = torch.from_numpy(arr.copy()).permute(2, 0, 1).float()
             tensors.append(t)
         video_tensor = torch.stack(tensors).unsqueeze(0)  # (1, F, 3, H, W)
         return video_tensor * 2.0 - 1.0  # normalize to [-1, 1]

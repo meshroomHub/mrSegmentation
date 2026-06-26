@@ -123,6 +123,8 @@ class VideoMaMa(desc.Node):
         inputFileMask = None
         if not Path(pathIn).exists():
             raise FileNotFoundError(f"Input path '{pathIn}' does not exist.")
+        if not Path(pathMask).exists():
+            raise FileNotFoundError(f"Input path for masks '{pathMask}' does not exist.")
         if not Path(pathIn).suffix.lower() in [".sfm", ".abc"]:
             raise ValueError(f"Input path '{pathIn}' is not a valid sfmData file.")
         if not os.path.exists(os.path.join(pathMask,"bboxes.json")):
@@ -253,7 +255,9 @@ class VideoMaMa(desc.Node):
                 os.mkdir(chunk.node.output.value)
 
             device = torch.device("cuda") if torch.cuda.is_available() and chunk.node.useGpu.value else torch.device("cpu")
-            model_path = os.path.join(os.getenv("VIDEOMAMA_MODELS_PATH"), "fromSammieRoto")
+            model_path = os.getenv("VIDEOMAMA_SR_MODELS_PATH")
+            if not model_path:
+                raise EnvironmentError("VIDEOMAMA_SR_MODELS_PATH is not set; it must point to the folder containing the same VideoMaMa model files as the ones used in SammieRoto2.")
 
             try:
                 pipeline = videoMaMaUtils.VideoInferencePipeline(
@@ -324,9 +328,13 @@ class VideoMaMa(desc.Node):
                         stopFrameId = frame_chunk.start_frame + slice_end
                         logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{startFrameId}, {stopFrameId}[")
                         if slice_idx > 0:
-                            cond_frames = cond_frames[-overlap:]
-                            mask_frames = mask_frames[-overlap:]
-                            startFrameId += overlap
+                            if overlap > 0:
+                                cond_frames = cond_frames[-overlap:]
+                                mask_frames = mask_frames[-overlap:]
+                                startFrameId += overlap
+                            else:
+                                cond_frames = []
+                                mask_frames = []
                         for frameId, box in frame_chunk.boxes.items():
                             if frameId >= startFrameId and frameId < stopFrameId:
                                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - frame_chunk.start_frame][0]), True)
@@ -408,8 +416,8 @@ class VideoMaMa(desc.Node):
 
                 frame_metadata_deep_model = dict(metadata_deep_model_base)
                 for prompt, bboxes in metadata_boxes[firstFrameId + frameId].items():
-                    for k, box in metadata_boxes[firstFrameId + frameId][prompt].items():
-                            frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
+                    for k, box in bboxes.items():
+                        frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
                 alpha = full_alpha[image_path[2]]
                 image.writeImage(image_path[4], alpha, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
                                 sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
