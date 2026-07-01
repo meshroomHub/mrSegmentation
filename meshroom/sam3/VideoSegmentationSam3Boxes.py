@@ -82,7 +82,7 @@ For each tracked object:
 3. Each chunk is split into tiles (if tiling enabled).
 4. Cropped image sequences are fed to the SAM3 video predictor with a text prompt on the first frame;
    masks are propagated across all frames.
-5. Tile masks are resized and composited into full-resolution masks using a **union** operation.
+5. Tile masks are resized and composited into full-resolution masks using a **union** operation and optional bonding.
 6. *(Tiling only)* Tiles with IoU below `minIoU` are replaced by the coarse mask crop.
 7. Masks are saved with optional inversion and bounding box metadata in file headers.
 
@@ -184,6 +184,19 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
             description="Minimal IoU between coarse and fine mask within a tile to keep the fine mask.",
             value=0.5,
             enabled=lambda node: node.enableTiling.value,
+        ),
+        desc.BoolParam(
+            name="enableBonding",
+            label="Enable Masks Bonding",
+            description="Enable bonding where instances overlap.",
+            value=True,
+        ),
+        desc.IntParam(
+            name="bondingKernelSize",
+            label="Bonding Kernel Size",
+            description="Kernel size for morphological processing applied for masks bonding.",
+            value=11,
+            enabled=lambda node: node.enableBonding.value,
         ),
         desc.File(
             name="segmentationModelPath",
@@ -471,12 +484,19 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
                                 fine_mask = np.zeros_like(tgt)
                                 frameId = frame_idx - chunk_tile.start_frame
                                 logger.debug(f"frame: {frame_idx}; tile: {box}; items number: {len(outputs_per_frame_visu[frameId].keys())}")
+                                masks = []
                                 for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
                                     mask = maskBoxProb["mask"]
                                     buf_in = oiio.ImageBuf(mask.astype('float32'))
                                     buf_out = oiio.ImageBufAlgo.resample(buf_in, roi=oiio.ROI(0, box_w, 0, box_h))
                                     mask = buf_out.get_pixels().reshape(box_h, box_w, 1)
-                                    bool_mask = mask.squeeze() > 0
+                                    masks.append(mask.squeeze())
+
+                                if masks:
+                                    bool_mask = masks[0] > 0
+                                    if len(masks) > 1 and chunk.node.enableBonding.value:
+                                        ks = chunk.node.bondingKernelSize.value
+                                        bool_mask = sam3Utils.bond_masks(masks, ks, ks, ks) > 0
                                     fine_mask[bool_mask] = [255, 255, 255] if maskNbChannel == 3 else [255]
 
                                 if chunk.node.enableTiling.value:
