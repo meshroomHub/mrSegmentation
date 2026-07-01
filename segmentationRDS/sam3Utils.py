@@ -392,3 +392,31 @@ def merge_tracks(
     chunk_merged.clear()
 
     return global_chunk, new_overlap_frame, next_global_id
+
+
+def bond_masks(masks, dilate_kernel_size: int = 11, conflict_kernel_size: int = 11, close_kernel_size: int = 11):
+    import cv2
+
+    # Dilate each individual mask
+    kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_kernel_size, dilate_kernel_size))
+    dilated_masks = [cv2.dilate(np.round(m).astype(np.uint8), kernel_dilate) for m in masks]
+    dilated_stack = np.stack(dilated_masks, axis=0)
+
+    # Detect overlapping regions to generate the activation mask
+    overlap_map = np.sum(dilated_stack, axis=0)
+    conflict_zone = (overlap_map >= 2).astype(np.uint8) * 255
+    kernel_conflict = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (conflict_kernel_size, conflict_kernel_size))
+    action_mask = cv2.dilate(conflict_zone, kernel_conflict)
+
+    # Merge individual masks into a single global mask
+    masks_stack = np.stack(masks, axis=0)
+    global_mask_raw = (np.sum(masks_stack, axis=0) > 0).astype(np.uint8) * 255 
+
+    # Apply morphological closing to fill holes in the global mask
+    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_kernel_size, close_kernel_size))
+    global_mask_closed = cv2.morphologyEx(global_mask_raw, cv2.MORPH_CLOSE, kernel_close)
+
+    # Apply the closed mask only within detected conflict regions
+    bonded_mask = np.where(action_mask > 0, global_mask_closed, global_mask_raw)
+
+    return bonded_mask
