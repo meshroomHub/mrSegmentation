@@ -52,6 +52,19 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             value="${RDS_SAM3_MODEL_PATH}",
         ),
         desc.BoolParam(
+            name="enableBonding",
+            label="Enable Masks Bonding",
+            description="Enable bonding where instances overlap.",
+            value=True,
+        ),
+        desc.IntParam(
+            name="bondingKernelSize",
+            label="Bonding Kernel Size",
+            description="Kernel size for morphological processing applied for masks bonding.",
+            value=11,
+            enabled=lambda node: node.enableBonding.value,
+        ),
+        desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
             description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
@@ -238,11 +251,17 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
                 "height": xyxy[3] - xyxy[1]
                 }}
 
-    def updateMaskImageAndDetectedBboxes(self, inference_state, maskImage, detectedBBoxes, key, w_ori, h_ori, PAR, orientation):
-        from segmentationRDS import image
+    def updateMaskImageAndDetectedBboxes(self, inference_state, maskImage, detectedBBoxes, key, w_ori, h_ori, PAR, orientation, ks_bond = 0):
+        from segmentationRDS import image, sam3Utils
+        import numpy as np
         masks, boxes, scores = inference_state["masks"], inference_state["boxes"], inference_state["scores"]
-        for mask in masks:
-            maskImage[mask.squeeze(0).cpu()] = [255, 255, 255]
+        masks = [mask.squeeze(0).cpu().numpy() for mask in masks]
+        if masks:
+            masks_stack = np.stack(masks, axis=0)
+            bool_mask = np.sum(masks_stack, axis=0) > 0
+            if len(masks) > 1 and ks_bond > 0:
+                bool_mask = sam3Utils.bond_masks(masks, ks_bond, ks_bond, ks_bond) > 0
+            maskImage[bool_mask] = [255, 255, 255]
         for idx, box in enumerate(boxes):
             x1, y1, x2, y2 = box.cpu().tolist()
             x1, y1 = image.fromUsualToRawOrientation(x1, y1, w_ori, h_ori, PAR, orientation)
@@ -349,21 +368,24 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
                         inference_state = processor.set_text_prompt(state=inference_state, prompt=textPrompt)
                         # Get the masks, bounding boxes, and scores
                         if "masks" in inference_state:
-                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation)
+                            ks_bond = chunk.node.bondingKernelSize.value if chunk.node.enableBonding.value else 0
+                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation, ks_bond)
 
-                    if not chunk.node.splitBoxPrompt:
+                    if not chunk.node.splitBoxPrompt.value:
                         processor.reset_all_prompts(state=inference_state)
                     for box, label in zip(bboxes, bboxLabels):
                         # Prompt the model with bboxes
-                        if chunk.node.splitBoxPrompt:
+                        if chunk.node.splitBoxPrompt.value:
                             processor.reset_all_prompts(state=inference_state)
                         inference_state = processor.add_geometric_prompt(state=inference_state, box=box, label=label)
                         # Get the masks, bounding boxes, and scores
-                        if "masks" in inference_state and label and chunk.node.splitBoxPrompt:
-                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation)
+                        if "masks" in inference_state and label and chunk.node.splitBoxPrompt.value:
+                            ks_bond = chunk.node.bondingKernelSize.value if chunk.node.enableBonding.value else 0
+                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation, ks_bond)
 
-                    if "masks" in inference_state and not chunk.node.splitBoxPrompt:
-                        self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation)
+                    if "masks" in inference_state and not chunk.node.splitBoxPrompt.value:
+                        ks_bond = chunk.node.bondingKernelSize.value if chunk.node.enableBonding.value else 0
+                        self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation, ks_bond)
 
                     if chunk.node.maskInvert.value:
                         mask = (mask_image[:,:,0:1] == 0).astype('float32')

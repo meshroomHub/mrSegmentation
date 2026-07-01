@@ -63,6 +63,19 @@ In order to associate a point to a given submask, it must be colored with the su
             enabled=lambda node: node.timeSlicing.value,
         ),
         desc.BoolParam(
+            name="enableBonding",
+            label="Enable Masks Bonding",
+            description="Enable bonding where instances overlap.",
+            value=True,
+        ),
+        desc.IntParam(
+            name="bondingKernelSize",
+            label="Bonding Kernel Size",
+            description="Kernel size for morphological processing applied for masks bonding.",
+            value=11,
+            enabled=lambda node: node.enableBonding.value,
+        ),
+        desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
             description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
@@ -283,7 +296,7 @@ In order to associate a point to a given submask, it must be colored with the su
 
     def processChunk(self, chunk):
         import json
-        from segmentationRDS import image
+        from segmentationRDS import image, sam3Utils
         from sam3.model_builder import build_sam3_video_predictor
         import numpy as np
         import torch
@@ -462,8 +475,16 @@ In order to associate a point to a given submask, it must be colored with the su
                 if len(masks.keys()) > 0:
                     colorPalette.generate_palette(max(masks.keys()) + 1)
                 cryptoName = "object" if prompt == "" else prompt
+
+                if masks.keys():
+                    masks_stack = np.stack(list(masks.values()), axis=0)
+                    bool_mask = np.sum(masks_stack, axis=0) > 0
+                    if len(masks.values()) > 1 and chunk.node.enableBonding.value:
+                        ks = chunk.node.bondingKernelSize.value
+                        bool_mask = sam3Utils.bond_masks(list(masks.values()), ks, ks, ks) > 0
+                    maskImage[bool_mask] = [255, 255, 255]
+
                 for key, mask in masks.items():
-                    maskImage[mask] = [255, 255, 255]
                     color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
                     colorMaskImage[mask] = [x/255.0 for x in color]
                     if chunk.node.outputCryptomatte.value:
@@ -472,9 +493,15 @@ In order to associate a point to a given submask, it must be colored with the su
                         manifest[obj_name] = hex_val
                         crypto_id[mask] = f32_hash
                         crypto_cov[mask] = 1.0
+
                 if frameId in outputs_per_frame_bwd.keys():
-                    for key, mask in outputs_per_frame_bwd[frameId].items():
-                        maskImage[mask] = [255, 255, 255]
+                    if outputs_per_frame_bwd[frameId].keys():
+                        masks_stack = np.stack(list(outputs_per_frame_bwd[frameId].values()), axis=0)
+                        bool_mask = np.sum(masks_stack, axis=0) > 0
+                        if len(outputs_per_frame_bwd[frameId].values()) > 1 and chunk.node.enableBonding.value:
+                            ks = chunk.node.bondingKernelSize.value
+                            bool_mask = sam3Utils.bond_masks(list(outputs_per_frame_bwd[frameId].values()), ks, ks, ks) > 0
+                        maskImage[bool_mask] = [255, 255, 255]
 
                 if chunk.node.outputCryptomatte.value:
                     spec = oiio.ImageSpec(img.shape[1], img.shape[0], 7, oiio.FLOAT)

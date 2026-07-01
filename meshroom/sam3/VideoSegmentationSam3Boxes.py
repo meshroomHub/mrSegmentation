@@ -493,7 +493,8 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
                                     masks.append(mask.squeeze())
 
                                 if masks:
-                                    bool_mask = masks[0] > 0
+                                    masks_stack = np.stack(masks, axis=0)
+                                    bool_mask = np.sum(masks_stack, axis=0) > 0
                                     if len(masks) > 1 and chunk.node.enableBonding.value:
                                         ks = chunk.node.bondingKernelSize.value
                                         bool_mask = sam3Utils.bond_masks(masks, ks, ks, ks) > 0

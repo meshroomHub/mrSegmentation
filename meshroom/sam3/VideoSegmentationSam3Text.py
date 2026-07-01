@@ -63,6 +63,19 @@ from a text prompt.
             enabled=lambda node: node.timeSlicing.value,
         ),
         desc.BoolParam(
+            name="enableBonding",
+            label="Enable Masks Bonding",
+            description="Enable bonding where instances overlap.",
+            value=True,
+        ),
+        desc.IntParam(
+            name="bondingKernelSize",
+            label="Bonding Kernel Size",
+            description="Kernel size for morphological processing applied for masks bonding.",
+            value=11,
+            enabled=lambda node: node.enableBonding.value,
+        ),
+        desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
             description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
@@ -298,8 +311,10 @@ from a text prompt.
             # Get detections for current frame (if any)
             frame_detections = direction_results.get(frame_id, {})
 
+            masks = []
             for key, mask_box_prob in frame_detections.items():
                 mask = mask_box_prob["mask"]
+                masks.append(mask.squeeze())
 
                 # Write binary mask corresponding to the definitive pass (forward if no merging, merged otherwise)
                 if is_definitive:
@@ -325,6 +340,16 @@ from a text prompt.
                 x1, y1, x2, y2 = bbox
                 bbox_str = f"{x1};{y1};{x2};{y2}"
                 metadata_boxes[frame_id][text_prompt][direction_name][f"{dir_prefix}_{text_prompt}_{key}"] = bbox_str
+
+            if masks:
+                masks_stack = np.stack(masks, axis=0)
+                mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1)
+                if len(masks) > 1 and node.enableBonding.value:
+                    ks = node.bondingKernelSize.value
+                    mask_global = np.expand_dims(sam3Utils.bond_masks(masks, ks, ks, ks), axis=-1)
+                if is_definitive:
+                    mask_images[frame_id] = mask_global
+
 
             # Save color mask image
             if node.outputColorMasks.value:
