@@ -73,6 +73,7 @@ In order to associate a point to a given submask, it must be colored with the su
             label="Bonding Kernel Size",
             description="Kernel size for morphological processing applied for masks bonding.",
             value=11,
+            range=(1, 255, 2),
             enabled=lambda node: node.enableBonding.value,
         ),
         desc.BoolParam(

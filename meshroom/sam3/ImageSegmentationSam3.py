@@ -62,6 +62,7 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             label="Bonding Kernel Size",
             description="Kernel size for morphological processing applied for masks bonding.",
             value=11,
+            range=(1, 255, 2),
             enabled=lambda node: node.enableBonding.value,
         ),
         desc.BoolParam(

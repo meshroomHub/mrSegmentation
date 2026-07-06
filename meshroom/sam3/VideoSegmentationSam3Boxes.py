@@ -196,6 +196,7 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
             label="Bonding Kernel Size",
             description="Kernel size for morphological processing applied for masks bonding.",
             value=11,
+            range=(1, 255, 2),
             enabled=lambda node: node.enableBonding.value,
         ),
         desc.File(
