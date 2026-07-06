@@ -144,9 +144,11 @@ class VideoMaMa(desc.Node):
                 if pinhole is not None:
                     par = pinhole.getPixelAspectRatio()
                 if keepFilename:
+                    filename = Path(inputFile).stem
                     if pathMask:
-                        inputFileMask = os.path.join(pathMask, Path(inputFile).stem + "." + extMask)
-                    outputFileMatte = os.path.join(outDir, Path(inputFile).stem + "." + extOut)
+                        mask_filename = "colorMask_%PROMPT%_fwd_" + str(filename)
+                        inputFileMask = os.path.join(pathMask, mask_filename + "." + extMask)
+                    outputFileMatte = os.path.join(outDir, filename + "." + extOut)
                 else:
                     if pathMask:
                         inputFileMask = os.path.join(pathMask, str(id) + "." + extMask)
@@ -305,6 +307,8 @@ class VideoMaMa(desc.Node):
             batch_size = chunk.node.batchSize.value
             overlap = chunk.node.overlap.value
 
+            colorPalette = image.paletteGenerator()
+
             for key, frame_chunks in bboxes.items():
 
                 if "_" in key:
@@ -337,16 +341,23 @@ class VideoMaMa(desc.Node):
                                 mask_frames = []
                         for frameId, box in frame_chunk.boxes.items():
                             if frameId >= startFrameId and frameId < stopFrameId:
-                                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - frame_chunk.start_frame][0]), True)
+                                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                 imgBuf = oiio.ImageBuf(img)
                                 imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
                                 method, frame = self._resize_image(img_crop, chunk.node.inferenceSize.value)
                                 resized_h, resized_w = frame.shape[:2]
-                                mask_path = str(chunk_image_paths[frameId - frame_chunk.start_frame][1])
-                                mask, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(mask_path, True)
-                                imgBuf = oiio.ImageBuf(mask)
+                                mask_path = str(chunk_image_paths[frameId - firstFrameId][1])
+                                mask_path = mask_path.replace("%PROMPT%", textPrompt)
+                                mask, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(mask_path, True, True, False)
+                                mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
+                                color_index = 0 if obj_id=="" else int(obj_id)
+                                colorPalette.generate_palette(color_index + 1)
+                                tgt = colorPalette.at(color_index)
+                                mask_id = np.zeros_like(img, dtype=np.float32)
+                                mask_id[(mask_uint8 == tgt).all(axis = -1)] = [1.0, 1.0, 1.0]
+                                imgBuf = oiio.ImageBuf(mask_id)
                                 imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
                                 if method == "resize":

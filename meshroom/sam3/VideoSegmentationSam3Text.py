@@ -171,7 +171,7 @@ from a text prompt.
         self.textPrompts = re.split(r'[\n]+', node.prompt.value)
         self.textPrompts = [str(textPrompt) for textPrompt in self.textPrompts if textPrompt]
         srcFilename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
-        node.colorMasksFwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".png"
+        node.colorMasksFwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".exr"
         node.colorMasksBwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
         node.cryptomatteFwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".png"
         node.cryptomatteBwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
@@ -381,7 +381,7 @@ from a text prompt.
 
                         if chunk.node.outputColorMasks.value:
                             if chunk.node.keepFilename.value:
-                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
+                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
                             else:
                                 outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".png")
 
