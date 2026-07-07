@@ -387,10 +387,12 @@ Known Limitations:
                             matte = cv2.resize(matte.detach().cpu().numpy(), (w_inference, h_inference))
                             box_matteRGB = np.dstack([matte, matte, matte])
                             box_matteRGB = cv2.resize(box_matteRGB, (w_inference, h_inference), interpolation=cv2.INTER_LINEAR)
-                            matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = box_matteRGB
+                            tgt = matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :]
+                            matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = np.maximum(tgt, box_matteRGB)
 
                         trimap_for_inference = np.dstack([trimap_for_inference, trimap_for_inference, trimap_for_inference])
-                        fullTrimap[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = trimap_for_inference
+                        tgt = fullTrimap[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :]
+                        fullTrimap[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = np.maximum(tgt, trimap_for_inference)
 
                         metadata_deep_model[key] = str(x_left_inference) + ";" + str(y_top_inference) + ";"
                         metadata_deep_model[key] += str(x_right_inference) + ";" + str(y_bottom_inference)
