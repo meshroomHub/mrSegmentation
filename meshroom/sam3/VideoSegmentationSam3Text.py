@@ -305,7 +305,8 @@ from a text prompt.
                         fwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
                         bwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
                         prev_overlap_detections_bwd = bwd_only[0]
-                        next_global_id_bwd = max(bwd_only[0].keys()) + 1
+                        if bwd_only[0].keys():
+                            next_global_id_bwd = max(bwd_only[0].keys()) + 1
                         logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
                     else:
 
@@ -318,7 +319,7 @@ from a text prompt.
                             fwd,
                             prev_overlap_detections_fwd,
                             next_global_id_fwd,
-                            iou_threshold=0.4,
+                            similatity_threshold=0.4,
                             use_mask=True,
                         )
                         colorPalette.generate_palette(next_global_id_fwd + 1)
@@ -336,7 +337,7 @@ from a text prompt.
                                 bwd,
                                 prev_overlap_detections_bwd,
                                 next_global_id_bwd,
-                                iou_threshold=0.4,
+                                similatity_threshold=0.4,
                                 use_mask=True,
                             )
                             colorPalette.generate_palette(next_global_id_bwd + 1)
@@ -354,8 +355,8 @@ from a text prompt.
                                 bwd_results=bwd,
                                 prev_overlap_detections=prev_overlap_detections_merged,
                                 next_global_id=next_global_id_merged,
-                                iou_threshold_merge=0.3,
-                                iou_threshold_track=0.4,
+                                similatity_threshold_merge=0.3,
+                                similatity_threshold_track=0.4,
                                 use_mask=True,
                             )
                             colorPalette.generate_palette(next_global_id_merged + 1)
