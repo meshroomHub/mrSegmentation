@@ -146,7 +146,7 @@ class VideoMaMa(desc.Node):
                 if keepFilename:
                     filename = Path(inputFile).stem
                     if pathMask:
-                        mask_filename = "colorMask_%PROMPT%_fwd_" + str(filename)
+                        mask_filename = "colorMask_%PROMPT%_merged_" + str(filename)
                         inputFileMask = os.path.join(pathMask, mask_filename + "." + extMask)
                     outputFileMatte = os.path.join(outDir, filename + "." + extOut)
                 else:
@@ -350,14 +350,23 @@ class VideoMaMa(desc.Node):
                                 resized_h, resized_w = frame.shape[:2]
                                 mask_path = str(chunk_image_paths[frameId - firstFrameId][1])
                                 mask_path = mask_path.replace("%PROMPT%", textPrompt)
+                                colorMask = True
+                                if not os.path.exists(mask_path):
+                                    mask_path = mask_path.replace("_merged_", "_fwd_")
+                                    if not os.path.exists(mask_path):
+                                        mask_path = mask_path.replace(f"colorMask_{textPrompt}_fwd_", "")
+                                        colorMask = False
                                 mask, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(mask_path, True, True, False)
-                                mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
-                                color_index = 0 if obj_id=="" else int(obj_id)
-                                colorPalette.generate_palette(color_index + 1)
-                                tgt = colorPalette.at(color_index)
-                                mask_id = np.zeros_like(img, dtype=np.float32)
-                                mask_id[(mask_uint8 == tgt).all(axis = -1)] = [1.0, 1.0, 1.0]
-                                imgBuf = oiio.ImageBuf(mask_id)
+                                imgBuf = oiio.ImageBuf(mask)
+                                if colorMask:
+                                    mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
+                                    color_index = 0 if obj_id=="" else int(obj_id)
+                                    colorPalette.generate_palette(color_index + 1)
+                                    tgt = colorPalette.at(color_index)
+                                    mask_id = np.zeros_like(img, dtype=np.float32)
+                                    mask_id[(mask_uint8 == tgt).all(axis = -1)] = [1.0, 1.0, 1.0]
+                                    imgBuf = oiio.ImageBuf(mask_id)
+                                    
                                 imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
                                 if method == "resize":
