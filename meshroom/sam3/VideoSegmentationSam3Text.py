@@ -522,17 +522,16 @@ from a text prompt.
 def get_image_paths_list(input_path):
     from pyalicevision import sfmData
     from pyalicevision import sfmDataIO
-    from pathlib import Path
 
     image_paths = []
 
     if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
         if Path(input_path).exists():
-            dataAV = sfmData.SfMData()
-            if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):
-                views = dataAV.getViews()
-                for id, v in views.items():
-                   image_paths.append((Path(v.getImage().getImagePath()), str(id), v.getFrameId()))
+            data = sfmData.SfMData()
+            if sfmDataIO.load(data, input_path, sfmDataIO.ALL):
+                views = data.getViews()
+                for view_id, view in views.items():
+                    image_paths.append((Path(view.getImage().getImagePath()), str(view_id), view.getFrameId()))
 
             image_paths.sort(key=lambda x: x[0])
     else:
