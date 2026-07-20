@@ -160,21 +160,27 @@ from a text prompt.
 
     def resolvePaths(self, node):
         import re
+
+        if node.prompt.value == "":
+            raise ValueError("Text prompt is empty.")
+
         input_path = node.input.value
         image_paths = get_image_paths_list(input_path)
         if len(image_paths) == 0:
-            raise FileNotFoundError(f'No image files found in {input_path}')
+            raise FileNotFoundError(f"No image files found in {input_path}.")
         self.image_paths = image_paths
-        if node.prompt.value == "":
-            raise ValueError(f'Text prompt is empty')
-        self.textPrompts = re.split(r'[\n]+', node.prompt.value)
-        self.textPrompts = [str(textPrompt) for textPrompt in self.textPrompts if textPrompt]
-        srcFilename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
-        node.colorMasksFwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".exr"
-        node.colorMasksBwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
-        node.colorMasksMerged.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_merged_" + srcFilename + ".exr"
-        node.cryptomatteFwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".png"
-        node.cryptomatteBwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
+
+        self.text_prompts = re.split(r'[\n]+', node.prompt.value)
+        self.text_prompts = [str(text_prompt) for text_prompt in self.text_prompts if text_prompt]
+        src_filename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
+        color_mask_prefix = node.output.value + "/colorMask_" + self.text_prompts[0]
+        cryptomatte_prefix = node.output.value + "/cryptomatte_" + self.text_prompts[0]
+        node.colorMasksFwd.value = color_mask_prefix + "_fwd_" + src_filename + ".exr"
+        node.colorMasksBwd.value = color_mask_prefix + "_bwd_" + src_filename + ".png"
+        node.colorMasksMerged.value = color_mask_prefix + "_merged_" + src_filename + ".exr"
+        node.cryptomatteFwd.value = cryptomatte_prefix + "_fwd_" + src_filename + ".png"
+        node.cryptomatteBwd.value = cryptomatte_prefix + "_bwd_" + src_filename + ".png"
+
 
     def processChunk(self, chunk):
         from segmentationRDS import image, sam3Utils
@@ -258,7 +264,7 @@ from a text prompt.
             for frameId in range(frameNumber):
                 metadata_boxes[frameId] = {}
 
-            for textPrompt in self.textPrompts:
+            for textPrompt in self.text_prompts:
 
                 logger.info(f"textPrompt: {textPrompt}")
                 boxes[textPrompt] = {"forward": {}, "backward": {}, "merged": {}}
@@ -480,7 +486,7 @@ from a text prompt.
 
                                     image.writeImage(outputFileColorMask, colorMaskImageMerged, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
-            prompts = [textPrompt.strip() for textPrompt in self.textPrompts if textPrompt.strip()]
+            prompts = [textPrompt.strip() for textPrompt in self.text_prompts if textPrompt.strip()]
             metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(prompts)
 
             for frameId in range(frameNumber):
@@ -502,7 +508,7 @@ from a text prompt.
                     optWrite.exrCompressionLevel(300)
 
                 frame_metadata_deep_model = dict(metadata_deep_model)
-                for prompt in self.textPrompts:
+                for prompt in self.text_prompts:
                     for direction in ["forward", "backward", "merged"]:
                         for k, box in metadata_boxes[frameId][prompt][direction].items():
                             frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
