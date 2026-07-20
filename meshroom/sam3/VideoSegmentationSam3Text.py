@@ -1,4 +1,4 @@
-__version__ = "1.1"
+__version__ = "1.2"
 
 import os
 from pathlib import Path
@@ -23,13 +23,11 @@ from a text prompt.
     inputs = [
         desc.File(
             name="input",
-            label="Input",
             description="SfMData file.",
             value="",
         ),
         desc.StringParam(
             name="prompt",
-            label="Prompt",
             description="What to segment, one item per line.",
             value="person",
             semantic="multiline",
@@ -48,7 +46,6 @@ from a text prompt.
         ),
         desc.BoolParam(
             name="timeSlicing",
-            label="Time Slicing",
             description="Enable time slicing by adding text prompt every N frames and Propagating the masks over N frames.\n"
                         "Propagation is forward only by default, or both forward and backward when 'Combine Forward and Backward Segmentation'\n"
                         "is enabled.",
@@ -56,7 +53,6 @@ from a text prompt.
         ),
         desc.IntParam(
             name="sliceSize",
-            label="Slice Size",
             description="Number of frames on which the mask is propagated.",
             value=16,
             enabled=lambda node: node.timeSlicing.value,
@@ -69,13 +65,11 @@ from a text prompt.
         ),
         desc.BoolParam(
             name="outputCryptomatte",
-            label="Output Cryptomatte",
             description="Generate exr images containing cryptomatte to encode the segmentation results.",
             value=False,
         ),
         desc.BoolParam(
             name="outputColorMasks",
-            label="Output Color Masks",
             description="Generate colored masks where colors are linked with object Ids.",
             value=False,
         ),
@@ -88,7 +82,6 @@ from a text prompt.
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -103,7 +96,6 @@ from a text prompt.
         ),
         desc.ChoiceParam(
             name="verboseLevel",
-            label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
             values=VERBOSE_LEVEL,
@@ -120,7 +112,6 @@ from a text prompt.
         ),
         desc.File(
             name="masks",
-            label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
@@ -152,7 +143,7 @@ from a text prompt.
         desc.File(
             name="cryptomatteFwd",
             label="Cryptomatte Forward",
-            description="Cryptomatte resulting from forward propagation embedded in exr images.",
+            description="Cryptomatte resulting from forward propagation embedded in EXR images.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputCryptomatte.value,
@@ -160,7 +151,7 @@ from a text prompt.
         desc.File(
             name="cryptomatteBwd",
             label="Cryptomatte Backward",
-            description="Cryptomatte resulting from backward propagation embedded in exr images.",
+            description="Cryptomatte resulting from backward propagation embedded in EXR images.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputCryptomatte.value and node.combineFwdAndBwdSeg.value,
@@ -245,7 +236,7 @@ from a text prompt.
 
             for idx, path in enumerate(chunk_image_paths):
                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
-                pil_images.append(Image.fromarray((255.0*img).astype("uint8")))
+                pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
                 sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
                 mask_images.append(np.zeros_like(img))
 
@@ -343,16 +334,17 @@ from a text prompt.
                             colorPalette.generate_palette(next_global_id_bwd + 1)
                             logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
 
-                            track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frameIdxToTextPrompt[n - 1]])
-                            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
+                            # Create FRESH copies for merge_tracks since the previous calls cleared the dicts
+                            track_fwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frameIdxToTextPrompt[n - 1]])
+                            track_bwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
                             firstFrame = frameIdxToTextPrompt[n - 1]
                             lastFrame = fIdx
-                            fwd = {k: v for k,v in track_fwd.items() if k >= firstFrame and k <= lastFrame}
-                            bwd = {k: v for k,v in track_bwd.items() if k >= firstFrame and k <= lastFrame}
+                            fwd_for_merge = {k: v for k,v in track_fwd_for_merge.items() if k >= firstFrame and k <= lastFrame}
+                            bwd_for_merge = {k: v for k,v in track_bwd_for_merge.items() if k >= firstFrame and k <= lastFrame}
 
                             fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = sam3Utils.merge_tracks(
-                                fwd_results=fwd,
-                                bwd_results=bwd,
+                                fwd_results=fwd_for_merge,
+                                bwd_results=bwd_for_merge,
                                 prev_overlap_detections=prev_overlap_detections_merged,
                                 next_global_id=next_global_id_merged,
                                 similatity_threshold_merge=0.3,
@@ -380,7 +372,7 @@ from a text prompt.
                             mask = maskBoxProb["mask"]
                             mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
                             color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                            colorMaskImageFwd[mask] = [x/255.0 for x in color]
+                            colorMaskImageFwd[mask] = [x / 255.0 for x in color]
 
                             if chunk.node.outputCryptomatte.value:
                                 obj_name = f"{cryptoName}_fwd_{int(key)}"
@@ -429,7 +421,7 @@ from a text prompt.
                                 mask = maskBoxProb["mask"]
                                 mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
                                 color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                                colorMaskImageBwd[mask] = [x/255.0 for x in color]
+                                colorMaskImageBwd[mask] = [x / 255.0 for x in color]
                                 if chunk.node.outputCryptomatte.value:
                                     obj_name = f"{cryptoName}_bwd_{int(key)}"
                                     f32_hash, hex_val, _ = image.hash_name(obj_name)
@@ -439,8 +431,8 @@ from a text prompt.
                                 bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
                                 boxes[textPrompt]["backward"][firstFrameId + frameId][key] = bbox
                                 x1,y1,x2,y2 = bbox
-                                bbox_str = str(x1)+";"+str(y1)+";"+str(x2)+";"+str(y2)
-                                metadata_boxes[frameId][textPrompt]["backward"]["bwd_"+textPrompt+"_"+str(key)] = bbox_str
+                                bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
+                                metadata_boxes[frameId][textPrompt]["backward"]["bwd_" + textPrompt + "_" + str(key)] = bbox_str
 
                             if chunk.node.outputColorMasks.value:
                                 if chunk.node.keepFilename.value:
@@ -469,13 +461,13 @@ from a text prompt.
                                     mask = maskBoxProb["mask"]
                                     mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
                                     color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                                    colorMaskImageMerged[mask] = [x/255.0 for x in color]
+                                    colorMaskImageMerged[mask] = [x / 255.0 for x in color]
                                     
                                     bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
                                     boxes[textPrompt]["merged"][firstFrameId + frameId][key] = bbox
                                     x1,y1,x2,y2 = bbox
-                                    bbox_str = str(x1)+";"+str(y1)+";"+str(x2)+";"+str(y2)
-                                    metadata_boxes[frameId][textPrompt]["merged"]["merged_"+textPrompt+"_"+str(key)] = bbox_str
+                                    bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
+                                    metadata_boxes[frameId][textPrompt]["merged"]["merged_" + textPrompt + "_" + str(key)] = bbox_str
 
                                 if chunk.node.outputColorMasks.value:
                                     if chunk.node.keepFilename.value:
