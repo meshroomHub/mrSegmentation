@@ -301,12 +301,21 @@ from a text prompt.
                     if n == 0:
                         fwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
                         bwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
-                        prev_overlap_detections_bwd = bwd_only[0]
-                        if bwd_only[0].keys():
-                            next_global_id_bwd = max(bwd_only[0].keys()) + 1
-                        logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
-                    else:
 
+                        # Initialize prev_overlap_detections_bwd with global IDs
+                        # by running a trivial assign_global_ids on just frame 0
+                        bwd_frame0_only = {fIdx: bwd_only[fIdx]}
+                        _, prev_overlap_detections_bwd, next_global_id_bwd = sam3Utils.assign_global_ids(
+                            bwd_frame0_only,
+                            {},
+                            next_global_id_bwd,
+                            similatity_threshold=0.4,
+                            use_mask=True,
+                        )
+                        colorPalette.generate_palette(next_global_id_bwd + 1)
+                        logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
+
+                    else:
                         track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
                         firstFrame = fIdx
                         lastFrame = fIdx if n == len(frameIdxToTextPrompt) - 1 else frameIdxToTextPrompt[n + 1]
