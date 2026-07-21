@@ -309,7 +309,7 @@ from a text prompt.
                             bwd_frame0_only,
                             {},
                             next_global_id_bwd,
-                            similatity_threshold=0.4,
+                            similarity_threshold=0.4,
                             use_mask=True,
                         )
                         colorPalette.generate_palette(next_global_id_bwd + 1)
@@ -322,7 +322,7 @@ from a text prompt.
                                 merged_frame0_only,
                                 {},
                                 next_global_id_merged,
-                                similatity_threshold=0.4,
+                                similarity_threshold=0.4,
                                 use_mask=True,
                             )
                             colorPalette.generate_palette(next_global_id_merged + 1)
@@ -338,7 +338,7 @@ from a text prompt.
                             fwd,
                             prev_overlap_detections_fwd,
                             next_global_id_fwd,
-                            similatity_threshold=0.4,
+                            similarity_threshold=0.4,
                             use_mask=True,
                         )
                         colorPalette.generate_palette(next_global_id_fwd + 1)
@@ -356,7 +356,7 @@ from a text prompt.
                                 bwd,
                                 prev_overlap_detections_bwd,
                                 next_global_id_bwd,
-                                similatity_threshold=0.4,
+                                similarity_threshold=0.4,
                                 use_mask=True,
                             )
                             colorPalette.generate_palette(next_global_id_bwd + 1)
@@ -375,8 +375,8 @@ from a text prompt.
                                 bwd_results=bwd_for_merge,
                                 prev_overlap_detections=prev_overlap_detections_merged,
                                 next_global_id=next_global_id_merged,
-                                similatity_threshold_merge=0.3,
-                                similatity_threshold_track=0.4,
+                                similarity_threshold_merge=0.3,
+                                similarity_threshold_track=0.4,
                                 use_mask=True,
                             )
                             colorPalette.generate_palette(next_global_id_merged + 1)

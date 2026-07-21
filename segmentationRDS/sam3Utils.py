@@ -72,7 +72,7 @@ def compute_similarity(det_a: dict, det_b: dict, use_mask: bool = True) -> float
 def match_detections(
     src_a: Dict[int, dict],
     src_b: Dict[int, dict],
-    similatity_threshold: float = 0.3,
+    similarity_threshold: float = 0.3,
     use_mask: bool = True,
 ) -> Tuple[Dict[int, int], list, list]:
     """
@@ -106,7 +106,7 @@ def match_detections(
     unmatched_b = list(ids_b)
 
     for r, c in zip(row_ind, col_ind):
-        if cost[r, c] < (1.0 - similatity_threshold):
+        if cost[r, c] < (1.0 - similarity_threshold):
             a, b = ids_a[r], ids_b[c]
             matches[a] = b
             unmatched_a.remove(a)
@@ -147,7 +147,7 @@ def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict]) -> di
 def merge_chunk_forward_backward(
     fwd_results: FrameResults,
     bwd_results: FrameResults,
-    similatity_threshold: float = 0.3,
+    similarity_threshold: float = 0.3,
     use_mask: bool = True,
 ) -> FrameResults:
     """
@@ -165,7 +165,7 @@ def merge_chunk_forward_backward(
     for frame_idx in all_frames:
         fwd_frame = fwd_results.get(frame_idx, {})
         bwd_frame = bwd_results.get(frame_idx, {})
-        matches, _, _ = match_detections(fwd_frame, bwd_frame, similatity_threshold, use_mask)
+        matches, _, _ = match_detections(fwd_frame, bwd_frame, similarity_threshold, use_mask)
         for fwd_id, bwd_id in matches.items():
             votes.setdefault(bwd_id, {})
             votes[bwd_id][fwd_id] = votes[bwd_id].get(fwd_id, 0) + 1
@@ -210,7 +210,7 @@ def merge_chunk_forward_backward(
 def merge_overlap_frame(
     prev_det: Dict[int, dict],  # global IDs — from the previous chunk
     curr_det: Dict[int, dict],  # local  IDs — from the current chunk
-    similatity_threshold: float = 0.4,
+    similarity_threshold: float = 0.4,
     use_mask: bool = True,
 ) -> Tuple[Dict[int, int], Dict[int, dict], Dict[int, int]]:
     """
@@ -228,7 +228,7 @@ def merge_overlap_frame(
     Args:
         prev_det      : {global_id: det} — overlap frame from previous chunk
         curr_det      : {local_id:  det} — overlap frame from current chunk
-        similatity_threshold : minimum similarity to accept a match
+        similarity_threshold : minimum similarity to accept a match
 
     Returns:
         local_to_global   : {local_id -> global_id} for matched objects
@@ -239,7 +239,7 @@ def merge_overlap_frame(
     matches, unmatched_local_ids, unmatched_prev_ids = match_detections(
         curr_det,   # src_a : local IDs
         prev_det,   # src_b : global IDs
-        similatity_threshold,
+        similarity_threshold,
         use_mask,
     )
     # matches : {local_id -> global_id}
@@ -269,7 +269,7 @@ def assign_global_ids(
     chunk_merged: FrameResults,
     prev_overlap_detections: Dict[int, dict],
     next_global_id: int,
-    similatity_threshold: float = 0.4,
+    similarity_threshold: float = 0.4,
     use_mask: bool = True,
 ) -> Tuple[FrameResults, Dict[int, dict], int]:
     """
@@ -301,7 +301,7 @@ def assign_global_ids(
     local_to_global, merged_overlap, unmatched_local = merge_overlap_frame(
         prev_overlap_detections,
         overlap_det_curr,
-        similatity_threshold,
+        similarity_threshold,
         use_mask,
     )
 
@@ -341,8 +341,8 @@ def merge_tracks(
     bwd_results: FrameResults,
     prev_overlap_detections: Dict[int, dict],
     next_global_id: int,
-    similatity_threshold_merge: float = 0.3,
-    similatity_threshold_track: float = 0.4,
+    similarity_threshold_merge: float = 0.3,
+    similarity_threshold_track: float = 0.4,
     use_mask: bool = True,
 ) -> Tuple[FrameResults, Dict[int, dict], int]:
     """
@@ -375,7 +375,7 @@ def merge_tracks(
     chunk_merged = merge_chunk_forward_backward(
         fwd_results,
         bwd_results,
-        similatity_threshold=similatity_threshold_merge,
+        similarity_threshold=similarity_threshold_merge,
         use_mask=use_mask,
     )
     fwd_results.clear()
@@ -386,11 +386,9 @@ def merge_tracks(
         chunk_merged,
         prev_overlap_detections,
         next_global_id,
-        similatity_threshold=similatity_threshold_track,
+        similarity_threshold=similarity_threshold_track,
         use_mask=use_mask,
     )
     chunk_merged.clear()
 
     return global_chunk, new_overlap_frame, next_global_id
-
-    
