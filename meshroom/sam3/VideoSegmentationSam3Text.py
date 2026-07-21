@@ -178,8 +178,8 @@ from a text prompt.
         node.colorMasksFwd.value = color_mask_prefix + "_fwd_" + src_filename + ".exr"
         node.colorMasksBwd.value = color_mask_prefix + "_bwd_" + src_filename + ".png"
         node.colorMasksMerged.value = color_mask_prefix + "_merged_" + src_filename + ".exr"
-        node.cryptomatteFwd.value = cryptomatte_prefix + "_fwd_" + src_filename + ".png"
-        node.cryptomatteBwd.value = cryptomatte_prefix + "_bwd_" + src_filename + ".png"
+        node.cryptomatteFwd.value = cryptomatte_prefix + "_fwd_" + src_filename + ".exr"
+        node.cryptomatteBwd.value = cryptomatte_prefix + "_bwd_" + src_filename + ".exr"
 
 
     def processChunk(self, chunk):
