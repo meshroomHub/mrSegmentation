@@ -315,6 +315,19 @@ from a text prompt.
                         colorPalette.generate_palette(next_global_id_bwd + 1)
                         logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
 
+                        # Initialize merged tracking for n == 0 as well
+                        if chunk.node.combineFwdAndBwdSeg.value:
+                            merged_frame0_only = {fIdx: fwd_only[fIdx]}
+                            fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = sam3Utils.assign_global_ids(
+                                merged_frame0_only,
+                                {},
+                                next_global_id_merged,
+                                similatity_threshold=0.4,
+                                use_mask=True,
+                            )
+                            colorPalette.generate_palette(next_global_id_merged + 1)
+                            logger.info(f"next_global_id_merged = {next_global_id_merged}")
+
                     else:
                         track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
                         firstFrame = fIdx
