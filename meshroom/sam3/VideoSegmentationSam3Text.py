@@ -158,6 +158,13 @@ from a text prompt.
         ),
     ]
 
+    def _build_output_path(self, chunk, paths, frame_id, prefix, extension):
+        if chunk.node.keepFilename.value:
+            path = str(Path(paths[frame_id][0]).stem)
+        else:
+            path = str(paths[frame_id][1])
+        return os.path.join(chunk.node.output.value, prefix + path + extension)
+
     def resolvePaths(self, node):
         import re
 
@@ -416,22 +423,13 @@ from a text prompt.
                             metadata_boxes[frameId][textPrompt]["forward"]["fwd_" + textPrompt + "_" + str(key)] = bbox_str
 
                         if chunk.node.outputColorMasks.value:
-                            if chunk.node.keepFilename.value:
-                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                            else:
-                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
-
+                            outputFileColorMask = self._build_output_path(chunk, chunk_image_paths, frameId, "colorMask_" + textPrompt + "_fwd_", ".exr")
                             optWrite = avimg.ImageWriteOptions()
                             optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-
                             image.writeImage(outputFileColorMask, colorMaskImageFwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
                         if chunk.node.outputCryptomatte.value:
-                            if chunk.node.keepFilename.value:
-                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                            else:
-                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
-
+                            cryptomattePath = self._build_output_path(chunk, chunk_image_paths, frameId, "cryptomatte_" + textPrompt + "_fwd_", ".exr")
                             image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
 
                     if chunk.node.combineFwdAndBwdSeg.value:
@@ -463,22 +461,13 @@ from a text prompt.
                                 metadata_boxes[frameId][textPrompt]["backward"]["bwd_" + textPrompt + "_" + str(key)] = bbox_str
 
                             if chunk.node.outputColorMasks.value:
-                                if chunk.node.keepFilename.value:
-                                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
-                                else:
-                                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".png")
-
+                                outputFileColorMask = self._build_output_path(chunk, chunk_image_paths, frameId, "colorMask_" + textPrompt + "_bwd_", ".png")
                                 optWrite = avimg.ImageWriteOptions()
                                 optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-
                                 image.writeImage(outputFileColorMask, colorMaskImageBwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
                             if chunk.node.outputCryptomatte.value:
-                                if chunk.node.keepFilename.value:
-                                    cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                                else:
-                                    cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
-
+                                cryptomattePath = self._build_output_path(chunk, chunk_image_paths, frameId, "cryptomatte_" + textPrompt + "_bwd_", ".exr")
                                 image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
 
                         if n > 0:
@@ -498,14 +487,9 @@ from a text prompt.
                                     metadata_boxes[frameId][textPrompt]["merged"]["merged_" + textPrompt + "_" + str(key)] = bbox_str
 
                                 if chunk.node.outputColorMasks.value:
-                                    if chunk.node.keepFilename.value:
-                                        outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_merged_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                                    else:
-                                        outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_merged_" + str(chunk_image_paths[frameId][1]) + ".exr")
-
+                                    outputFileColorMask = self._build_output_path(chunk, chunk_image_paths, frameId, "colorMask_" + textPrompt + "_merged_", ".exr")
                                     optWrite = avimg.ImageWriteOptions()
                                     optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-
                                     image.writeImage(outputFileColorMask, colorMaskImageMerged, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
             prompts = [textPrompt.strip() for textPrompt in self.text_prompts if textPrompt.strip()]
@@ -518,13 +502,10 @@ from a text prompt.
                     mask = (mask_images[frameId][:,:,0:1] > 0).astype('float32')
                 logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
 
-                if chunk.node.keepFilename.value:
-                    outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
-                else:
-                    outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." + chunk.node.extensionOut.value)
-
+                outputFileMask = self._build_output_path(chunk, chunk_image_paths, frameId, "", "." + chunk.node.extensionOut.value)
                 optWrite = avimg.ImageWriteOptions()
                 optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+
                 if Path(outputFileMask).suffix.lower() == ".exr":
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
