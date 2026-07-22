@@ -161,12 +161,12 @@ from a text prompt.
         ),
     ]
 
-    def _build_output_path(self, chunk, paths, frame_id, prefix, extension):
-        if chunk.node.keepFilename.value:
-            path = str(Path(paths[frame_id][0]).stem)
+    def _build_output_path(self, node, frame_id, prefix, extension):
+        if node.keepFilename.value:
+            path = str(Path(self.image_paths[frame_id][0]).stem)
         else:
-            path = str(paths[frame_id][1])
-        return os.path.join(chunk.node.output.value, prefix + path + extension)
+            path = str(self.image_paths[frame_id][1])
+        return os.path.join(node.output.value, prefix + path + extension)
 
     def _update_global_ids(self, results, prev_overlap, next_id, color_palette):
         """ Helper to assign global IDs and expand the color palette. """
@@ -206,7 +206,7 @@ from a text prompt.
 
         return frame_idx_to_text_prompt, max_frame_num_to_track, track_dir
 
-    def _load_source_images(self, chunk_image_paths):
+    def _load_source_images(self):
         """ Helper to load input images, prepare PIL frames, and extract dimensions. """
         from PIL import Image
         from segmentationRDS import image
@@ -216,7 +216,7 @@ from a text prompt.
         mask_images = []
         source_info = None
 
-        for idx, path_data in enumerate(chunk_image_paths):
+        for idx, path_data in enumerate(self.image_paths):
             img, h_ori, w_ori, PAR, orientation = image.loadImage(str(path_data[0]), True)
             pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
 
@@ -233,6 +233,112 @@ from a text prompt.
             mask_images.append(np.zeros_like(img))
 
         return pil_images, mask_images, source_info
+
+    def _export_direction_masks(
+        self,
+        node,
+        frame_range,
+        direction_name,          # "forward", "backward", "merged"
+        direction_results,       # fwd_only, bwd_only, fwd_bwd
+        text_prompt,
+        color_palette,
+        source_info,
+        state,
+        metadata_deep_model,
+        color_mask_ext,          # ".exr" or ".png"
+        write_cryptomatte=False
+    ):
+        """ Helper to process results, draw color masks, generate cryptomatte, and save outputs. """
+        from pyalicevision import image as avimg
+        from segmentationRDS import image, sam3Utils
+        import numpy as np
+
+        # Explicitly map direction names to exact legacy prefixes
+        prefix_map = {
+            "forward": "fwd",
+            "backward": "bwd",
+            "merged": "merged"
+        }
+        dir_prefix = prefix_map[direction_name]
+
+        first_frame_id = source_info["first_frame_id"]
+        crypto_name = "object" if text_prompt == "" else text_prompt
+        mask_images = state["mask_images"]
+        boxes = state["boxes"]
+        metadata_boxes = state["metadata_boxes"]
+
+        for frame_id in frame_range:
+            color_mask_image = np.zeros(source_info["shape"], dtype=source_info["dtype"])
+
+            if (first_frame_id + frame_id) not in boxes[text_prompt][direction_name]:
+                boxes[text_prompt][direction_name][first_frame_id + frame_id] = {}
+
+            output_crypto = write_cryptomatte and node.outputCryptomatte.value
+            if output_crypto:
+                crypto_id = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
+                crypto_cov = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
+                manifest = {}
+
+            # Get detections for current frame (if any)
+            frame_detections = direction_results.get(frame_id, {})
+
+            for key, mask_box_prob in frame_detections.items():
+                mask = mask_box_prob["mask"]
+
+                # Draw composite binary mask (for final step)
+                mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
+
+                # Draw visual color mask
+                color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
+                color_mask_image[mask] = [x / 255.0 for x in color]
+
+                # Process Cryptomatte hashes (matches old f"{crypto_name}_{dir_prefix}_{int(key)}")
+                if output_crypto:
+                    obj_name = f"{crypto_name}_{dir_prefix}_{int(key)}"
+                    f32_hash, hex_val, _ = image.hash_name(obj_name)
+                    manifest[obj_name] = hex_val
+                    crypto_id[mask] = f32_hash
+                    crypto_cov[mask] = 1.0
+
+                # Process Bounding Box mapping
+                bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"])
+                boxes[text_prompt][direction_name][first_frame_id + frame_id][key] = bbox
+
+                # Metadata writes (matches old: "fwd_" + text_prompt + "_" + str(key))
+                x1, y1, x2, y2 = bbox
+                bbox_str = f"{x1};{y1};{x2};{y2}"
+                metadata_boxes[frame_id][text_prompt][direction_name][f"{dir_prefix}_{text_prompt}_{key}"] = bbox_str
+
+            # Save color mask image
+            if node.outputColorMasks.value:
+                prefix = f"colorMask_{text_prompt}_{dir_prefix}_"
+                output_file_color_mask = self._build_output_path(node, frame_id, prefix, color_mask_ext)
+                optWrite = avimg.ImageWriteOptions()
+                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                image.writeImage(
+                    output_file_color_mask,
+                    color_mask_image,
+                    source_info["h_ori"],
+                    source_info["w_ori"],
+                    source_info["orientation"],
+                    source_info["PAR"],
+                    metadata_deep_model,
+                    optWrite
+                )
+
+            # Save Cryptomatte Multichannel EXR
+            if output_crypto:
+                prefix = f"cryptomatte_{text_prompt}_{dir_prefix}_"
+                cryptomatte_path = self._build_output_path(node, frame_id, prefix, ".exr")
+                image.writeCryptomatte(
+                    cryptomatte_path,
+                    crypto_name,
+                    source_info["w_ori"],
+                    source_info["h_ori"],
+                    manifest,
+                    crypto_id,
+                    crypto_cov
+                )
 
     def resolve_paths(self, node):
         import re
@@ -262,10 +368,8 @@ from a text prompt.
     def processChunk(self, chunk):
         from segmentationRDS import image, sam3Utils
         from sam3.model_builder import build_sam3_video_predictor
-        import numpy as np
         import torch
         from pyalicevision import image as avimg
-        from PIL import Image
         import json
 
         try:
@@ -279,9 +383,7 @@ from a text prompt.
             if not chunk.node.output.value:
                 return
 
-            logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
-
-            chunk_image_paths = self.image_paths
+            logger.info(f"Chunk range from {chunk.range.start} to {chunk.range.last}")
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
@@ -298,15 +400,16 @@ from a text prompt.
             mask_images = []
 
             color_palette = image.paletteGenerator()
-            first_frame_id = chunk_image_paths[0][2]
-            frame_number = len(chunk_image_paths)
+            first_frame_id = self.image_paths[0][2]
+            frame_number = len(self.image_paths)
 
             frame_idx_to_text_prompt, max_frame_num_to_track, track_dir = self._get_tracking_config(
                 chunk.node, frame_number
             )
             logger.info(f"frame_idx_to_text_prompt: {frame_idx_to_text_prompt}; direction = {track_dir}")
 
-            pil_images, mask_images, source_info = self._load_source_images(chunk_image_paths)
+            pil_images, mask_images, source_info = self._load_source_images()
+            source_info["first_frame_id"] = first_frame_id
 
             response = video_predictor.handle_request(
                 request={"type": "start_session", "resource_path": pil_images}
@@ -318,12 +421,18 @@ from a text prompt.
             for frame_id in range(frame_number):
                 metadata_boxes[frame_id] = {}
 
-            for text_prompt in self.text_prompts:
+            tracking_state = {
+                "mask_images": mask_images,
+                "boxes": boxes,
+                "metadata_boxes": metadata_boxes
+            }
 
+            for text_prompt in self.text_prompts:
                 logger.info(f"Text prompt: {text_prompt}")
+
                 boxes[text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
-                crypto_name = "object" if text_prompt == "" else text_prompt
                 metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = text_prompt
+
                 for frame_id in range(frame_number):
                     metadata_boxes[frame_id][text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
 
@@ -422,103 +531,52 @@ from a text prompt.
 
                     logger.debug(f"Extract boxes for frame Fwd from : {frame_idx} to {last_frame_idx_fwd - 1}")
 
-                    for frame_id in range(frame_idx, last_frame_idx_fwd):
-                        color_mask_image_fwd = np.zeros(source_info["shape"], dtype=source_info["dtype"])
-
-                        if chunk.node.outputCryptomatte.value:
-                            crypto_id_fwd = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
-                            crypto_cov_fwd = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
-                            manifest_fwd = {}
-
-                        boxes[text_prompt]["forward"][first_frame_id + frame_id] = {}
-
-                        for key, mask_box_prob in fwd_only[frame_id].items():
-                            mask = mask_box_prob["mask"]
-                            mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
-                            color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
-                            color_mask_image_fwd[mask] = [x / 255.0 for x in color]
-
-                            if chunk.node.outputCryptomatte.value:
-                                obj_name = f"{crypto_name}_fwd_{int(key)}"
-                                f32_hash, hex_val, _ = image.hash_name(obj_name)
-                                manifest_fwd[obj_name] = hex_val
-                                crypto_id_fwd[mask] = f32_hash
-                                crypto_cov_fwd[mask] = 1.0
-
-                            bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"]) # (x, y, x+w, y+h)
-                            boxes[text_prompt]["forward"][first_frame_id + frame_id][key] = bbox
-                            x1, y1, x2, y2 = bbox
-                            bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
-                            metadata_boxes[frame_id][text_prompt]["forward"]["fwd_" + text_prompt + "_" + str(key)] = bbox_str
-
-                        if chunk.node.outputColorMasks.value:
-                            output_file_color_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "colorMask_" + text_prompt + "_fwd_", ".exr")
-                            optWrite = avimg.ImageWriteOptions()
-                            optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                            image.writeImage(output_file_color_mask, color_mask_image_fwd, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], metadata_deep_model, optWrite)
-
-                        if chunk.node.outputCryptomatte.value:
-                            cryptomatte_path = self._build_output_path(chunk, chunk_image_paths, frame_id, "cryptomatte_" + text_prompt + "_fwd_", ".exr")
-                            image.writeCryptomatte(cryptomatte_path, crypto_name, source_info["w_ori"], source_info["h_ori"], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
+                    self._export_direction_masks(
+                        node=chunk.node,
+                        frame_range=range(frame_idx, last_frame_idx_fwd),
+                        direction_name="forward",
+                        direction_results=fwd_only,
+                        text_prompt=text_prompt,
+                        color_palette=color_palette,
+                        source_info=source_info,
+                        state=tracking_state,
+                        metadata_deep_model=metadata_deep_model,
+                        color_mask_ext=".exr",
+                        write_cryptomatte=True
+                    )
 
                     if chunk.node.combineFwdAndBwdSeg.value:
                         # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
                         first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
-                        for frame_id in range(first_frame_idx_bwd, frame_idx + 1):
-                            color_mask_image_bwd = np.zeros(source_info["shape"], dtype=source_info["dtype"])
-                            if chunk.node.outputCryptomatte.value:
-                                crypto_id_bwd = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
-                                crypto_cov_bwd = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
-                                manifest_bwd = {}
-                            boxes[text_prompt]["backward"][first_frame_id + frame_id] = {}
-                            for key, mask_box_prob in bwd_only[frame_id].items():
-                                mask = mask_box_prob["mask"]
-                                mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
-                                color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
-                                color_mask_image_bwd[mask] = [x / 255.0 for x in color]
-                                if chunk.node.outputCryptomatte.value:
-                                    obj_name = f"{crypto_name}_bwd_{int(key)}"
-                                    f32_hash, hex_val, _ = image.hash_name(obj_name)
-                                    manifest_bwd[obj_name] = hex_val
-                                    crypto_id_bwd[mask] = f32_hash
-                                    crypto_cov_bwd[mask] = 1.0
-                                bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"]) # (x, y, x+w, y+h)
-                                boxes[text_prompt]["backward"][first_frame_id + frame_id][key] = bbox
-                                x1,y1,x2,y2 = bbox
-                                bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
-                                metadata_boxes[frame_id][text_prompt]["backward"]["bwd_" + text_prompt + "_" + str(key)] = bbox_str
 
-                            if chunk.node.outputColorMasks.value:
-                                output_file_color_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "colorMask_" + text_prompt + "_bwd_", ".png")
-                                optWrite = avimg.ImageWriteOptions()
-                                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                                image.writeImage(output_file_color_mask, color_mask_image_bwd, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], metadata_deep_model, optWrite)
-
-                            if chunk.node.outputCryptomatte.value:
-                                cryptomatte_path = self._build_output_path(chunk, chunk_image_paths, frame_id, "cryptomatte_" + text_prompt + "_bwd_", ".exr")
-                                image.writeCryptomatte(cryptomatte_path, crypto_name, source_info["w_ori"], source_info["h_ori"], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
+                        self._export_direction_masks(
+                            node=chunk.node,
+                            frame_range=range(first_frame_idx_bwd, frame_idx + 1),
+                            direction_name="backward",
+                            direction_results=bwd_only,
+                            text_prompt=text_prompt,
+                            color_palette=color_palette,
+                            source_info=source_info,
+                            state=tracking_state,
+                            metadata_deep_model=metadata_deep_model,
+                            color_mask_ext=".png",
+                            write_cryptomatte=True
+                        )
 
                         if n > 0:
-                            for frame_id in range(first_frame_idx_bwd - 1, frame_idx + 1):
-                                color_mask_image_merged = np.zeros(source_info["shape"], dtype=source_info["dtype"])
-                                boxes[text_prompt]["merged"][first_frame_id + frame_id] = {}
-                                for key, mask_box_prob in fwd_bwd[frame_id].items():
-                                    mask = mask_box_prob["mask"]
-                                    mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
-                                    color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
-                                    color_mask_image_merged[mask] = [x / 255.0 for x in color]
-
-                                    bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"]) # (x, y, x+w, y+h)
-                                    boxes[text_prompt]["merged"][first_frame_id + frame_id][key] = bbox
-                                    x1,y1,x2,y2 = bbox
-                                    bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
-                                    metadata_boxes[frame_id][text_prompt]["merged"]["merged_" + text_prompt + "_" + str(key)] = bbox_str
-
-                                if chunk.node.outputColorMasks.value:
-                                    output_file_color_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "colorMask_" + text_prompt + "_merged_", ".exr")
-                                    optWrite = avimg.ImageWriteOptions()
-                                    optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                                    image.writeImage(output_file_color_mask, color_mask_image_merged, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], metadata_deep_model, optWrite)
+                            self._export_direction_masks(
+                                node=chunk.node,
+                                frame_range=range(first_frame_idx_bwd - 1, frame_idx + 1),
+                                direction_name="merged",
+                                direction_results=fwd_bwd,
+                                text_prompt=text_prompt,
+                                color_palette=color_palette,
+                                source_info=source_info,
+                                state=tracking_state,
+                                metadata_deep_model=metadata_deep_model,
+                                color_mask_ext=".exr",
+                                write_cryptomatte=False
+                            )
 
             prompts = [text_prompt.strip() for text_prompt in self.text_prompts if text_prompt.strip()]
             metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(prompts)
@@ -528,9 +586,9 @@ from a text prompt.
                     mask = (mask_images[frame_id][:, :, 0:1] == 0).astype('float32')
                 else:
                     mask = (mask_images[frame_id][:, :, 0:1] > 0).astype('float32')
-                logger.info(f"frame_id: {frame_id} - {chunk_image_paths[frame_id][0]}")
+                logger.info(f"frame_id: {frame_id} - {self.image_paths[frame_id][0]}")
 
-                output_file_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "", "." + chunk.node.extensionOut.value)
+                output_file_mask = self._build_output_path(chunk.node, frame_id, "", "." + chunk.node.extensionOut.value)
                 optWrite = avimg.ImageWriteOptions()
                 optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
 
