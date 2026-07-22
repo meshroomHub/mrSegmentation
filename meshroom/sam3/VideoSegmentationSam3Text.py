@@ -271,6 +271,11 @@ from a text prompt.
         boxes = state["boxes"]
         metadata_boxes = state["metadata_boxes"]
 
+        is_definitive = (
+            (node.combineFwdAndBwdSeg.value and direction_name == "merged") or
+            (not node.combineFwdAndBwdSeg.value and direction_name == "forward")
+        )
+
         write_cryptomatte = (direction_name in ["forward", "backward"])
         crypto_name = "object" if text_prompt == "" else text_prompt
 
@@ -292,8 +297,9 @@ from a text prompt.
             for key, mask_box_prob in frame_detections.items():
                 mask = mask_box_prob["mask"]
 
-                # Draw composite binary mask (for final step)
-                mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
+                # Write binary mask corresponding to the definitive pass (forward if no merging, merged otherwise)
+                if is_definitive:
+                    mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
 
                 # Draw visual color mask
                 color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
