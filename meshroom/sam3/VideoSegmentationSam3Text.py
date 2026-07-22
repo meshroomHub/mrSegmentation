@@ -244,16 +244,13 @@ from a text prompt.
         color_palette,
         source_info,
         state,
-        metadata_deep_model,
-        color_mask_ext,          # ".exr" or ".png"
-        write_cryptomatte=False
+        metadata_deep_model
     ):
         """ Helper to process results, draw color masks, generate cryptomatte, and save outputs. """
         from pyalicevision import image as avimg
         from segmentationRDS import image, sam3Utils
         import numpy as np
 
-        # Explicitly map direction names to exact legacy prefixes
         prefix_map = {
             "forward": "fwd",
             "backward": "bwd",
@@ -261,11 +258,21 @@ from a text prompt.
         }
         dir_prefix = prefix_map[direction_name]
 
+        ext_map = {
+            "forward": ".exr",
+            "backward": ".png",
+            "merged": ".exr"
+        }
+        color_mask_ext = ext_map[direction_name]
+
         first_frame_id = source_info["first_frame_id"]
-        crypto_name = "object" if text_prompt == "" else text_prompt
+
         mask_images = state["mask_images"]
         boxes = state["boxes"]
         metadata_boxes = state["metadata_boxes"]
+
+        write_cryptomatte = (direction_name in ["forward", "backward"])
+        crypto_name = "object" if text_prompt == "" else text_prompt
 
         for frame_id in frame_range:
             color_mask_image = np.zeros(source_info["shape"], dtype=source_info["dtype"])
@@ -340,6 +347,90 @@ from a text prompt.
                     crypto_cov
                 )
 
+    def _update_tracking_at_step(
+        self,
+        n,
+        frame_idx,
+        frame_idx_to_text_prompt,
+        outputs_per_frame,
+        track_states,
+        color_palette,
+        combine_fwd_bwd
+    ):
+        """ Helper to process and slice forward/backward tracks and update global IDs. """
+        from segmentationRDS import sam3Utils
+
+        # n == 0: Initialization block
+        if n == 0:
+            fwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            bwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            fwd_bwd = None
+
+            # Initialize backward tracking
+            bwd_frame0_only = {frame_idx: bwd_only[frame_idx]}
+            _, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"] = self._update_global_ids(
+                bwd_frame0_only, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"], color_palette
+            )
+            logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
+
+            # Initialize merged tracking if enabled
+            if combine_fwd_bwd:
+                merged_frame0_only = {frame_idx: fwd_only[frame_idx]}
+                fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = self._update_global_ids(
+                    merged_frame0_only, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"], color_palette
+                )
+                logger.info(f"next_global_id_merged = {track_states['merged']['next_id']}")
+
+            return fwd_only, bwd_only, fwd_bwd
+
+        # n > 0: Propagation & Merging block
+        track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+        first_frame = frame_idx
+        last_frame = frame_idx if n == len(frame_idx_to_text_prompt) - 1 else frame_idx_to_text_prompt[n + 1]
+        fwd = self._slice_track(track_fwd, first_frame, last_frame)
+
+        fwd_only, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"] = self._update_global_ids(
+            fwd, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"], color_palette
+        )
+        logger.info(f"next_global_id_fwd = {track_states['fwd']['next_id']}")
+
+        bwd_only = None
+        fwd_bwd = None
+
+        if combine_fwd_bwd:
+            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            first_frame_bwd = frame_idx_to_text_prompt[n - 1]
+            last_frame_bwd = frame_idx
+            bwd = self._slice_track(track_bwd, first_frame_bwd, last_frame_bwd)
+
+            bwd_only, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"] = self._update_global_ids(
+                bwd, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"], color_palette
+            )
+            logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
+
+            # Fresh slicing calculations for merge operations
+            track_fwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
+            track_bwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            fwd_for_merge = self._slice_track(track_fwd_for_merge, first_frame_bwd, last_frame_bwd)
+            bwd_for_merge = self._slice_track(track_bwd_for_merge, first_frame_bwd, last_frame_bwd)
+
+            fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = sam3Utils.merge_tracks(
+                fwd_results=fwd_for_merge,
+                bwd_results=bwd_for_merge,
+                prev_overlap_detections=track_states["merged"]["prev_overlap"],
+                next_global_id=track_states["merged"]["next_id"],
+                similarity_threshold_merge=0.3,
+                similarity_threshold_track=0.4,
+                use_mask=True,
+            )
+            color_palette.generate_palette(track_states["merged"]["next_id"] + 1)
+            logger.info(f"next_global_id_merged = {track_states['merged']['next_id']}")
+
+        # Clear historical frames from memory
+        del outputs_per_frame[frame_idx_to_text_prompt[n - 1]]
+
+        return fwd_only, bwd_only, fwd_bwd
+
     def resolve_paths(self, node):
         import re
 
@@ -396,16 +487,11 @@ from a text prompt.
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video-TextPrompt"
 
-            pil_images = []
-            mask_images = []
-
             color_palette = image.paletteGenerator()
             first_frame_id = self.image_paths[0][2]
             frame_number = len(self.image_paths)
 
-            frame_idx_to_text_prompt, max_frame_num_to_track, track_dir = self._get_tracking_config(
-                chunk.node, frame_number
-            )
+            frame_idx_to_text_prompt, max_frame_num_to_track, track_dir = self._get_tracking_config(chunk.node, frame_number)
             logger.info(f"frame_idx_to_text_prompt: {frame_idx_to_text_prompt}; direction = {track_dir}")
 
             pil_images, mask_images, source_info = self._load_source_images()
@@ -417,9 +503,7 @@ from a text prompt.
             session_id = response["session_id"]
 
             boxes = {}
-            metadata_boxes = {}
-            for frame_id in range(frame_number):
-                metadata_boxes[frame_id] = {}
+            metadata_boxes = {frame_id: {} for frame_id in range(frame_number)}
 
             tracking_state = {
                 "mask_images": mask_images,
@@ -440,15 +524,13 @@ from a text prompt.
 
                 outputs_per_frame = {}
 
-                prev_overlap_detections_fwd = {}
-                next_global_id_fwd: int = 0
-                prev_overlap_detections_bwd = {}
-                next_global_id_bwd: int = 0
-                prev_overlap_detections_merged = {}
-                next_global_id_merged: int = 0
+                track_states = {
+                    "fwd": {"prev_overlap": {}, "next_id": 0},
+                    "bwd": {"prev_overlap": {}, "next_id": 0},
+                    "merged": {"prev_overlap": {}, "next_id": 0}
+                }
 
                 for n, frame_idx in enumerate(frame_idx_to_text_prompt):
-
                     logger.info(f"text prompt at relative frame {frame_idx} (absolute frame {int(first_frame_id) + frame_idx})")
 
                     video_predictor.handle_request(
@@ -461,70 +543,15 @@ from a text prompt.
                     )
                     outputs_per_frame[frame_idx] = sam3Utils.propagateInVideo(video_predictor, session_id, frame_idx, max_frame_num_to_track, track_dir)
 
-                    if n == 0:
-                        fwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
-                        bwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
-
-                        # Initialize prev_overlap_detections_bwd with global IDs
-                        # by running a trivial assign_global_ids on just frame 0
-                        bwd_frame0_only = {frame_idx: bwd_only[frame_idx]}
-                        _, prev_overlap_detections_bwd, next_global_id_bwd = self._update_global_ids(
-                            bwd_frame0_only, {}, next_global_id_bwd, color_palette
-                        )
-                        logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
-
-                        # Initialize merged tracking for n == 0 as well
-                        if chunk.node.combineFwdAndBwdSeg.value:
-                            merged_frame0_only = {frame_idx: fwd_only[frame_idx]}
-                            fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = self._update_global_ids(
-                                merged_frame0_only, {}, next_global_id_merged, color_palette
-                            )
-                            logger.info(f"next_global_id_merged = {next_global_id_merged}")
-
-                    else:
-                        track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
-                        first_frame = frame_idx
-                        last_frame = frame_idx if n == len(frame_idx_to_text_prompt) - 1 else frame_idx_to_text_prompt[n + 1]
-                        fwd = self._slice_track(track_fwd, first_frame, last_frame)
-
-                        fwd_only, prev_overlap_detections_fwd, next_global_id_fwd = self._update_global_ids(
-                            fwd, prev_overlap_detections_fwd, next_global_id_fwd, color_palette
-                        )
-                        logger.info(f"next_global_id_fwd = {next_global_id_fwd}")
-
-                        if chunk.node.combineFwdAndBwdSeg.value:
-                            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
-
-                            first_frame = frame_idx_to_text_prompt[n - 1]
-                            last_frame = frame_idx
-                            bwd = self._slice_track(track_bwd, first_frame, last_frame)
-
-                            bwd_only, prev_overlap_detections_bwd, next_global_id_bwd = self._update_global_ids(
-                                bwd, prev_overlap_detections_bwd, next_global_id_bwd, color_palette
-                            )
-                            logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
-
-                            # Create FRESH copies for merge_tracks since the previous calls cleared the dicts
-                            track_fwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
-                            track_bwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
-                            first_frame = frame_idx_to_text_prompt[n - 1]
-                            last_frame = frame_idx
-                            fwd_for_merge = self._slice_track(track_fwd_for_merge, first_frame, last_frame)
-                            bwd_for_merge = self._slice_track(track_bwd_for_merge, first_frame, last_frame)
-
-                            fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = sam3Utils.merge_tracks(
-                                fwd_results=fwd_for_merge,
-                                bwd_results=bwd_for_merge,
-                                prev_overlap_detections=prev_overlap_detections_merged,
-                                next_global_id=next_global_id_merged,
-                                similarity_threshold_merge=0.3,
-                                similarity_threshold_track=0.4,
-                                use_mask=True,
-                            )
-                            color_palette.generate_palette(next_global_id_merged + 1)
-                            logger.info(f"next_global_id_merged = {next_global_id_merged}")
-
-                        del outputs_per_frame[frame_idx_to_text_prompt[n - 1]]
+                    fwd_only, bwd_only, fwd_bwd = self._update_tracking_at_step(
+                        n=n,
+                        frame_idx=frame_idx,
+                        frame_idx_to_text_prompt=frame_idx_to_text_prompt,
+                        outputs_per_frame=outputs_per_frame,
+                        track_states=track_states,
+                        color_palette=color_palette,
+                        combine_fwd_bwd=chunk.node.combineFwdAndBwdSeg.value
+                    )
 
                     # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
                     last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1] if n < len(frame_idx_to_text_prompt) - 1 else frame_number
@@ -540,9 +567,7 @@ from a text prompt.
                         color_palette=color_palette,
                         source_info=source_info,
                         state=tracking_state,
-                        metadata_deep_model=metadata_deep_model,
-                        color_mask_ext=".exr",
-                        write_cryptomatte=True
+                        metadata_deep_model=metadata_deep_model
                     )
 
                     if chunk.node.combineFwdAndBwdSeg.value:
@@ -558,9 +583,7 @@ from a text prompt.
                             color_palette=color_palette,
                             source_info=source_info,
                             state=tracking_state,
-                            metadata_deep_model=metadata_deep_model,
-                            color_mask_ext=".png",
-                            write_cryptomatte=True
+                            metadata_deep_model=metadata_deep_model
                         )
 
                         if n > 0:
@@ -573,9 +596,7 @@ from a text prompt.
                                 color_palette=color_palette,
                                 source_info=source_info,
                                 state=tracking_state,
-                                metadata_deep_model=metadata_deep_model,
-                                color_mask_ext=".exr",
-                                write_cryptomatte=False
+                                metadata_deep_model=metadata_deep_model
                             )
 
             prompts = [text_prompt.strip() for text_prompt in self.text_prompts if text_prompt.strip()]
