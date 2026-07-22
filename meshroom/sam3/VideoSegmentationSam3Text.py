@@ -364,13 +364,27 @@ from a text prompt.
         combine_fwd_bwd
     ):
         """ Helper to process and slice forward/backward tracks and update global IDs. """
+        import copy
         from segmentationRDS import sam3Utils
+
+        # Call prepareMasksForVisualization once per raw outputs dictionary to prevent repeating mutating calls
+        prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
 
         # n == 0: Initialization block
         if n == 0:
-            fwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
-            bwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            # Deep copy to prevent in-place modifications from leaking between lists
+            fwd_only = copy.deepcopy(prepared_track)
+            bwd_only = copy.deepcopy(prepared_track)
             fwd_bwd = None
+
+            # Properly initialize the Forward global ID tracking at n = 0
+            first_frame = frame_idx
+            last_frame = frame_idx_to_text_prompt[1] if len(frame_idx_to_text_prompt) > 1 else max(fwd_only.keys())
+            fwd = self._slice_track(fwd_only, first_frame, last_frame)
+            fwd_only, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"] = self._update_global_ids(
+                fwd, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"], color_palette
+            )
+            logger.info(f"next_global_id_fwd = {track_states['fwd']['next_id']}")
 
             # Initialize backward tracking
             bwd_frame0_only = {frame_idx: bwd_only[frame_idx]}
@@ -392,7 +406,9 @@ from a text prompt.
         # n > 0: Propagation & Merging block
         track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
         first_frame = frame_idx
-        last_frame = frame_idx if n == len(frame_idx_to_text_prompt) - 1 else frame_idx_to_text_prompt[n + 1]
+
+        # Keep the remaining forward frames on the last segment instead of truncating to frame_idx
+        last_frame = max(track_fwd.keys()) if n == len(frame_idx_to_text_prompt) - 1 else frame_idx_to_text_prompt[n + 1]
         fwd = self._slice_track(track_fwd, first_frame, last_frame)
 
         fwd_only, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"] = self._update_global_ids(
@@ -414,9 +430,10 @@ from a text prompt.
             )
             logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
 
-            # Fresh slicing calculations for merge operations
-            track_fwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
-            track_bwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            # Fresh, completely isolated slice calculations for merge operations
+            prev_prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
+            track_fwd_for_merge = copy.deepcopy(prev_prepared_track)
+            track_bwd_for_merge = copy.deepcopy(prepared_track)
             fwd_for_merge = self._slice_track(track_fwd_for_merge, first_frame_bwd, last_frame_bwd)
             bwd_for_merge = self._slice_track(track_bwd_for_merge, first_frame_bwd, last_frame_bwd)
 
