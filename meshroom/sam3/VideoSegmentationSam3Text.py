@@ -1,5 +1,6 @@
 __version__ = "1.2"
 
+import logging
 import os
 from pathlib import Path
 
@@ -7,18 +8,20 @@ from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 from pyalicevision import parallelization as avpar
 
-import logging
 logger = logging.getLogger("VideoSegmentationSam3Text")
 
 class VideoSegmentationSam3Text(desc.Node):
-    size = avpar.DynamicViewsSize("input")
-    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
-
-    category = "Segmentation"
-    documentation = """
+    """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
 from a text prompt.
 """
+    size = avpar.DynamicViewsSize("input")
+    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
+
+    text_prompts = []
+    image_paths = []
+
+    category = "Segmentation"
 
     inputs = [
         desc.File(
@@ -165,7 +168,7 @@ from a text prompt.
             path = str(paths[frame_id][1])
         return os.path.join(chunk.node.output.value, prefix + path + extension)
 
-    def resolvePaths(self, node):
+    def resolve_paths(self, node):
         import re
 
         if node.prompt.value == "":
@@ -180,8 +183,10 @@ from a text prompt.
         self.text_prompts = re.split(r'[\n]+', node.prompt.value)
         self.text_prompts = [str(text_prompt) for text_prompt in self.text_prompts if text_prompt]
         src_filename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
+
         color_mask_prefix = node.output.value + "/colorMask_" + self.text_prompts[0]
         cryptomatte_prefix = node.output.value + "/cryptomatte_" + self.text_prompts[0]
+
         node.colorMasksFwd.value = color_mask_prefix + "_fwd_" + src_filename + ".exr"
         node.colorMasksBwd.value = color_mask_prefix + "_bwd_" + src_filename + ".png"
         node.colorMasksMerged.value = color_mask_prefix + "_merged_" + src_filename + ".exr"
@@ -199,8 +204,7 @@ from a text prompt.
         import json
 
         try:
-
-            self.resolvePaths(chunk.node)
+            self.resolve_paths(chunk.node)
 
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
@@ -218,7 +222,8 @@ from a text prompt.
                 os.mkdir(chunk.node.output.value)
 
             gpus_to_use = [torch.cuda.current_device()]
-            video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
+            video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue,
+                                                         gpus_to_use=gpus_to_use)
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
@@ -227,36 +232,36 @@ from a text prompt.
             pil_images = []
             mask_images = []
 
-            colorPalette = image.paletteGenerator()
-            firstFrameId = chunk_image_paths[0][2]
-            frameNumber = len(chunk_image_paths)
+            color_palette = image.paletteGenerator()
+            first_frame_id = chunk_image_paths[0][2]
+            frame_number = len(chunk_image_paths)
 
-            frameIdxToTextPrompt = [0]
+            frame_idx_to_text_prompt = [0]
             max_frame_num_to_track = None
             track_dir = "forward"
             if chunk.node.timeSlicing.value:
                 max_frame_num_to_track = chunk.node.sliceSize.value
                 currFrameToTextPrompt = 0
-                while currFrameToTextPrompt + chunk.node.sliceSize.value < frameNumber:
+                while currFrameToTextPrompt + chunk.node.sliceSize.value < frame_number:
                     currFrameToTextPrompt += chunk.node.sliceSize.value
-                    frameIdxToTextPrompt.append(currFrameToTextPrompt)
+                    frame_idx_to_text_prompt.append(currFrameToTextPrompt)
             if chunk.node.combineFwdAndBwdSeg.value:
                 track_dir = "both"
-                if frameIdxToTextPrompt[-1] < frameNumber - 1:
-                    frameIdxToTextPrompt.append(frameNumber - 1)
+                if frame_idx_to_text_prompt[-1] < frame_number - 1:
+                    frame_idx_to_text_prompt.append(frame_number - 1)
 
-            logger.info(f"frameIdxToTextPrompt: {frameIdxToTextPrompt}; direction = {track_dir}")
+            logger.info(f"frame_idx_to_text_prompt: {frame_idx_to_text_prompt}; direction = {track_dir}")
 
-            for idx, path in enumerate(chunk_image_paths):
+            for idx, _ in enumerate(chunk_image_paths):
                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
                 pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
-                sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
+                source_info = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
                 mask_images.append(np.zeros_like(img))
 
-                if firstFrameId is None or chunk_image_paths[idx][2] is None:
-                    frameId = idx
+                if first_frame_id is None or chunk_image_paths[idx][2] is None:
+                    frame_id = idx
                 else:
-                    frameId = chunk_image_paths[idx][2] - firstFrameId
+                    frame_id = chunk_image_paths[idx][2] - first_frame_id
 
             response = video_predictor.handle_request(
                 request=dict(
@@ -268,17 +273,17 @@ from a text prompt.
 
             boxes = {}
             metadata_boxes = {}
-            for frameId in range(frameNumber):
-                metadata_boxes[frameId] = {}
+            for frame_id in range(frame_number):
+                metadata_boxes[frame_id] = {}
 
-            for textPrompt in self.text_prompts:
+            for text_prompt in self.text_prompts:
 
-                logger.info(f"textPrompt: {textPrompt}")
-                boxes[textPrompt] = {"forward": {}, "backward": {}, "merged": {}}
-                cryptoName = "object" if textPrompt == "" else textPrompt
-                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = textPrompt
-                for frameId in range(frameNumber):
-                    metadata_boxes[frameId][textPrompt] = {"forward": {}, "backward": {}, "merged": {}}
+                logger.info(f"Text prompt: {text_prompt}")
+                boxes[text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
+                crypto_name = "object" if text_prompt == "" else text_prompt
+                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = text_prompt
+                for frame_id in range(frame_number):
+                    metadata_boxes[frame_id][text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
 
                 video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
 
@@ -291,27 +296,27 @@ from a text prompt.
                 prev_overlap_detections_merged = {}
                 next_global_id_merged: int = 0
 
-                for n, fIdx in enumerate(frameIdxToTextPrompt):
+                for n, frame_idx in enumerate(frame_idx_to_text_prompt):
 
-                    logger.info(f"text prompt at relative frame {fIdx} (absolute frame {int(firstFrameId) + fIdx})")
+                    logger.info(f"text prompt at relative frame {frame_idx} (absolute frame {int(first_frame_id) + frame_idx})")
 
                     video_predictor.handle_request(
                         request=dict(
                             type="add_prompt",
                             session_id=session_id,
-                            frame_index=fIdx,
-                            text=textPrompt,
+                            frame_index=frame_idx,
+                            text=text_prompt,
                         )
                     )
-                    outputs_per_frame[fIdx] = sam3Utils.propagateInVideo(video_predictor, session_id, fIdx, max_frame_num_to_track, track_dir)
+                    outputs_per_frame[frame_idx] = sam3Utils.propagateInVideo(video_predictor, session_id, frame_idx, max_frame_num_to_track, track_dir)
 
                     if n == 0:
-                        fwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
-                        bwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
+                        fwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+                        bwd_only = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
 
                         # Initialize prev_overlap_detections_bwd with global IDs
                         # by running a trivial assign_global_ids on just frame 0
-                        bwd_frame0_only = {fIdx: bwd_only[fIdx]}
+                        bwd_frame0_only = {frame_idx: bwd_only[frame_idx]}
                         _, prev_overlap_detections_bwd, next_global_id_bwd = sam3Utils.assign_global_ids(
                             bwd_frame0_only,
                             {},
@@ -324,7 +329,7 @@ from a text prompt.
 
                         # Initialize merged tracking for n == 0 as well
                         if chunk.node.combineFwdAndBwdSeg.value:
-                            merged_frame0_only = {fIdx: fwd_only[fIdx]}
+                            merged_frame0_only = {frame_idx: fwd_only[frame_idx]}
                             fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = sam3Utils.assign_global_ids(
                                 merged_frame0_only,
                                 {},
@@ -332,14 +337,14 @@ from a text prompt.
                                 similarity_threshold=0.4,
                                 use_mask=True,
                             )
-                            colorPalette.generate_palette(next_global_id_merged + 1)
+                            color_palette.generate_palette(next_global_id_merged + 1)
                             logger.info(f"next_global_id_merged = {next_global_id_merged}")
 
                     else:
-                        track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
-                        firstFrame = fIdx
-                        lastFrame = fIdx if n == len(frameIdxToTextPrompt) - 1 else frameIdxToTextPrompt[n + 1]
-                        fwd = {k: v for k,v in track_fwd.items() if k >= firstFrame and k <= lastFrame}
+                        track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+                        first_frame = frame_idx
+                        last_frame = frame_idx if n == len(frame_idx_to_text_prompt) - 1 else frame_idx_to_text_prompt[n + 1]
+                        fwd = {k: v for k, v in track_fwd.items() if k >= first_frame and k <= last_frame}
 
                         fwd_only, prev_overlap_detections_fwd, next_global_id_fwd = sam3Utils.assign_global_ids(
                             fwd,
@@ -348,16 +353,15 @@ from a text prompt.
                             similarity_threshold=0.4,
                             use_mask=True,
                         )
-                        colorPalette.generate_palette(next_global_id_fwd + 1)
+                        color_palette.generate_palette(next_global_id_fwd + 1)
                         logger.info(f"next_global_id_fwd = {next_global_id_fwd}")
 
                         if chunk.node.combineFwdAndBwdSeg.value:
+                            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
 
-                            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
-
-                            firstFrame = frameIdxToTextPrompt[n - 1]
-                            lastFrame = fIdx
-                            bwd = {k: v for k,v in track_bwd.items() if k >= firstFrame and k <= lastFrame}
+                            first_frame = frame_idx_to_text_prompt[n - 1]
+                            last_frame = frame_idx
+                            bwd = {k: v for k, v in track_bwd.items() if k >= first_frame and k <= last_frame}
 
                             bwd_only, prev_overlap_detections_bwd, next_global_id_bwd = sam3Utils.assign_global_ids(
                                 bwd,
@@ -366,16 +370,16 @@ from a text prompt.
                                 similarity_threshold=0.4,
                                 use_mask=True,
                             )
-                            colorPalette.generate_palette(next_global_id_bwd + 1)
+                            color_palette.generate_palette(next_global_id_bwd + 1)
                             logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
 
                             # Create FRESH copies for merge_tracks since the previous calls cleared the dicts
-                            track_fwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frameIdxToTextPrompt[n - 1]])
-                            track_bwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[fIdx])
-                            firstFrame = frameIdxToTextPrompt[n - 1]
-                            lastFrame = fIdx
-                            fwd_for_merge = {k: v for k,v in track_fwd_for_merge.items() if k >= firstFrame and k <= lastFrame}
-                            bwd_for_merge = {k: v for k,v in track_bwd_for_merge.items() if k >= firstFrame and k <= lastFrame}
+                            track_fwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
+                            track_bwd_for_merge = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+                            first_frame = frame_idx_to_text_prompt[n - 1]
+                            last_frame = frame_idx
+                            fwd_for_merge = {k: v for k, v in track_fwd_for_merge.items() if k >= first_frame and k <= last_frame}
+                            bwd_for_merge = {k: v for k, v in track_bwd_for_merge.items() if k >= first_frame and k <= last_frame}
 
                             fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = sam3Utils.merge_tracks(
                                 fwd_results=fwd_for_merge,
@@ -386,141 +390,143 @@ from a text prompt.
                                 similarity_threshold_track=0.4,
                                 use_mask=True,
                             )
-                            colorPalette.generate_palette(next_global_id_merged + 1)
+                            color_palette.generate_palette(next_global_id_merged + 1)
                             logger.info(f"next_global_id_merged = {next_global_id_merged}")
 
-                        del outputs_per_frame[frameIdxToTextPrompt[n - 1]]
+                        del outputs_per_frame[frame_idx_to_text_prompt[n - 1]]
 
-                    # write Fwd from fIdx to frameIdxToTextPrompt[n + 1]
-                    lastFIdxFwd = frameIdxToTextPrompt[n + 1] if n < len(frameIdxToTextPrompt) - 1 else frameNumber
+                    # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
+                    last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1] if n < len(frame_idx_to_text_prompt) - 1 else frame_number
 
-                    logger.debug(f"Extract boxes for frame Fwd from : {fIdx} to {lastFIdxFwd - 1}")
+                    logger.debug(f"Extract boxes for frame Fwd from : {frame_idx} to {last_frame_idx_fwd - 1}")
 
-                    for frameId in range(fIdx, lastFIdxFwd):
-                        colorMaskImageFwd = np.zeros_like(img)
+                    for frame_id in range(frame_idx, last_frame_idx_fwd):
+                        color_mask_image_fwd = np.zeros_like(img)
+
                         if chunk.node.outputCryptomatte.value:
                             crypto_id_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                             crypto_cov_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                             manifest_fwd = {}
-                        boxes[textPrompt]["forward"][firstFrameId + frameId] = {}
-                        for key, maskBoxProb in fwd_only[frameId].items():
-                            mask = maskBoxProb["mask"]
-                            mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
-                            color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                            colorMaskImageFwd[mask] = [x / 255.0 for x in color]
+
+                        boxes[text_prompt]["forward"][first_frame_id + frame_id] = {}
+
+                        for key, mask_box_prob in fwd_only[frame_id].items():
+                            mask = mask_box_prob["mask"]
+                            mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
+                            color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
+                            color_mask_image_fwd[mask] = [x / 255.0 for x in color]
 
                             if chunk.node.outputCryptomatte.value:
-                                obj_name = f"{cryptoName}_fwd_{int(key)}"
+                                obj_name = f"{crypto_name}_fwd_{int(key)}"
                                 f32_hash, hex_val, _ = image.hash_name(obj_name)
                                 manifest_fwd[obj_name] = hex_val
                                 crypto_id_fwd[mask] = f32_hash
                                 crypto_cov_fwd[mask] = 1.0
 
-                            bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                            boxes[textPrompt]["forward"][firstFrameId + frameId][key] = bbox
+                            bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"]) # (x, y, x+w, y+h)
+                            boxes[text_prompt]["forward"][first_frame_id + frame_id][key] = bbox
                             x1, y1, x2, y2 = bbox
                             bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
-                            metadata_boxes[frameId][textPrompt]["forward"]["fwd_" + textPrompt + "_" + str(key)] = bbox_str
+                            metadata_boxes[frame_id][text_prompt]["forward"]["fwd_" + text_prompt + "_" + str(key)] = bbox_str
 
                         if chunk.node.outputColorMasks.value:
-                            outputFileColorMask = self._build_output_path(chunk, chunk_image_paths, frameId, "colorMask_" + textPrompt + "_fwd_", ".exr")
+                            output_file_color_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "colorMask_" + text_prompt + "_fwd_", ".exr")
                             optWrite = avimg.ImageWriteOptions()
                             optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                            image.writeImage(outputFileColorMask, colorMaskImageFwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                            image.writeImage(output_file_color_mask, color_mask_image_fwd, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], metadata_deep_model, optWrite)
 
                         if chunk.node.outputCryptomatte.value:
-                            cryptomattePath = self._build_output_path(chunk, chunk_image_paths, frameId, "cryptomatte_" + textPrompt + "_fwd_", ".exr")
-                            image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
+                            cryptomatte_path = self._build_output_path(chunk, chunk_image_paths, frame_id, "cryptomatte_" + text_prompt + "_fwd_", ".exr")
+                            image.writeCryptomatte(cryptomatte_path, crypto_name, img.shape[1], img.shape[0], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
 
                     if chunk.node.combineFwdAndBwdSeg.value:
-
-                        # write Bwd from frameIdxToTextPrompt[n - 1] to fIdx
-                        firstFIdxBwd = frameIdxToTextPrompt[n - 1] + 1 if n > 0 else fIdx
-                        for frameId in range(firstFIdxBwd, fIdx + 1):
-                            colorMaskImageBwd = np.zeros_like(img)
+                        # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
+                        first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
+                        for frame_id in range(first_frame_idx_bwd, frame_idx + 1):
+                            color_mask_image_bwd = np.zeros_like(img)
                             if chunk.node.outputCryptomatte.value:
                                 crypto_id_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                                 crypto_cov_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                                 manifest_bwd = {}
-                            boxes[textPrompt]["backward"][firstFrameId + frameId] = {}
-                            for key, maskBoxProb in bwd_only[frameId].items():
-                                mask = maskBoxProb["mask"]
-                                mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
-                                color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                                colorMaskImageBwd[mask] = [x / 255.0 for x in color]
+                            boxes[text_prompt]["backward"][first_frame_id + frame_id] = {}
+                            for key, mask_box_prob in bwd_only[frame_id].items():
+                                mask = mask_box_prob["mask"]
+                                mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
+                                color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
+                                color_mask_image_bwd[mask] = [x / 255.0 for x in color]
                                 if chunk.node.outputCryptomatte.value:
-                                    obj_name = f"{cryptoName}_bwd_{int(key)}"
+                                    obj_name = f"{crypto_name}_bwd_{int(key)}"
                                     f32_hash, hex_val, _ = image.hash_name(obj_name)
                                     manifest_bwd[obj_name] = hex_val
                                     crypto_id_bwd[mask] = f32_hash
                                     crypto_cov_bwd[mask] = 1.0
-                                bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                                boxes[textPrompt]["backward"][firstFrameId + frameId][key] = bbox
+                                bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"]) # (x, y, x+w, y+h)
+                                boxes[text_prompt]["backward"][first_frame_id + frame_id][key] = bbox
                                 x1,y1,x2,y2 = bbox
                                 bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
-                                metadata_boxes[frameId][textPrompt]["backward"]["bwd_" + textPrompt + "_" + str(key)] = bbox_str
+                                metadata_boxes[frame_id][text_prompt]["backward"]["bwd_" + text_prompt + "_" + str(key)] = bbox_str
 
                             if chunk.node.outputColorMasks.value:
-                                outputFileColorMask = self._build_output_path(chunk, chunk_image_paths, frameId, "colorMask_" + textPrompt + "_bwd_", ".png")
+                                output_file_color_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "colorMask_" + text_prompt + "_bwd_", ".png")
                                 optWrite = avimg.ImageWriteOptions()
                                 optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                                image.writeImage(outputFileColorMask, colorMaskImageBwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                                image.writeImage(output_file_color_mask, color_mask_image_bwd, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], metadata_deep_model, optWrite)
 
                             if chunk.node.outputCryptomatte.value:
-                                cryptomattePath = self._build_output_path(chunk, chunk_image_paths, frameId, "cryptomatte_" + textPrompt + "_bwd_", ".exr")
-                                image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
+                                cryptomatte_path = self._build_output_path(chunk, chunk_image_paths, frame_id, "cryptomatte_" + text_prompt + "_bwd_", ".exr")
+                                image.writeCryptomatte(cryptomatte_path, crypto_name, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
 
                         if n > 0:
-                            for frameId in range(firstFIdxBwd - 1, fIdx + 1):
-                                colorMaskImageMerged = np.zeros_like(img)
-                                boxes[textPrompt]["merged"][firstFrameId + frameId] = {}
-                                for key, maskBoxProb in fwd_bwd[frameId].items():
-                                    mask = maskBoxProb["mask"]
-                                    mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
-                                    color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                                    colorMaskImageMerged[mask] = [x / 255.0 for x in color]
-                                    
-                                    bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                                    boxes[textPrompt]["merged"][firstFrameId + frameId][key] = bbox
+                            for frame_id in range(first_frame_idx_bwd - 1, frame_idx + 1):
+                                color_mask_image_merged = np.zeros_like(img)
+                                boxes[text_prompt]["merged"][first_frame_id + frame_id] = {}
+                                for key, mask_box_prob in fwd_bwd[frame_id].items():
+                                    mask = mask_box_prob["mask"]
+                                    mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
+                                    color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
+                                    color_mask_image_merged[mask] = [x / 255.0 for x in color]
+
+                                    bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"]) # (x, y, x+w, y+h)
+                                    boxes[text_prompt]["merged"][first_frame_id + frame_id][key] = bbox
                                     x1,y1,x2,y2 = bbox
                                     bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
-                                    metadata_boxes[frameId][textPrompt]["merged"]["merged_" + textPrompt + "_" + str(key)] = bbox_str
+                                    metadata_boxes[frame_id][text_prompt]["merged"]["merged_" + text_prompt + "_" + str(key)] = bbox_str
 
                                 if chunk.node.outputColorMasks.value:
-                                    outputFileColorMask = self._build_output_path(chunk, chunk_image_paths, frameId, "colorMask_" + textPrompt + "_merged_", ".exr")
+                                    output_file_color_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "colorMask_" + text_prompt + "_merged_", ".exr")
                                     optWrite = avimg.ImageWriteOptions()
                                     optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                                    image.writeImage(outputFileColorMask, colorMaskImageMerged, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                                    image.writeImage(output_file_color_mask, color_mask_image_merged, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], metadata_deep_model, optWrite)
 
-            prompts = [textPrompt.strip() for textPrompt in self.text_prompts if textPrompt.strip()]
+            prompts = [text_prompt.strip() for text_prompt in self.text_prompts if text_prompt.strip()]
             metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(prompts)
 
-            for frameId in range(frameNumber):
+            for frame_id in range(frame_number):
                 if chunk.node.maskInvert.value:
-                    mask = (mask_images[frameId][:,:,0:1] == 0).astype('float32')
+                    mask = (mask_images[frame_id][:, :, 0:1] == 0).astype('float32')
                 else:
-                    mask = (mask_images[frameId][:,:,0:1] > 0).astype('float32')
-                logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
+                    mask = (mask_images[frame_id][:, :, 0:1] > 0).astype('float32')
+                logger.info(f"frame_id: {frame_id} - {chunk_image_paths[frame_id][0]}")
 
-                outputFileMask = self._build_output_path(chunk, chunk_image_paths, frameId, "", "." + chunk.node.extensionOut.value)
+                output_file_mask = self._build_output_path(chunk, chunk_image_paths, frame_id, "", "." + chunk.node.extensionOut.value)
                 optWrite = avimg.ImageWriteOptions()
                 optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
 
-                if Path(outputFileMask).suffix.lower() == ".exr":
+                if Path(output_file_mask).suffix.lower() == ".exr":
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
 
                 frame_metadata_deep_model = dict(metadata_deep_model)
                 for prompt in self.text_prompts:
                     for direction in ["forward", "backward", "merged"]:
-                        for k, box in metadata_boxes[frameId][prompt][direction].items():
+                        for k, box in metadata_boxes[frame_id][prompt][direction].items():
                             frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
 
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
+                image.writeImage(output_file_mask, mask, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], frame_metadata_deep_model, optWrite)
 
-            jsonFilename = chunk.node.output.value + "/bboxes.json"
-            with open(jsonFilename, "w", encoding="utf_8") as f:
-                json.dump(boxes, f, indent=4, ensure_ascii=False)
+            json_filename = chunk.node.output.value + "/bboxes.json"
+            with open(json_filename, "w", encoding="utf_8") as file:
+                json.dump(boxes, file, indent=4, ensure_ascii=False)
 
             video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
 
