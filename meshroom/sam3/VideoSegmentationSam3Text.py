@@ -168,6 +168,20 @@ from a text prompt.
             path = str(paths[frame_id][1])
         return os.path.join(chunk.node.output.value, prefix + path + extension)
 
+    def _update_global_ids(self, results, prev_overlap, next_id, color_palette):
+        """ Helper to assign global IDs and expand the color palette. """
+        from segmentationRDS import sam3Utils
+
+        updated_res, next_prev_overlap, updated_id = sam3Utils.assign_global_ids(
+            results,
+            prev_overlap,
+            next_id,
+            similarity_threshold=0.4,
+            use_mask=True,
+        )
+        color_palette.generate_palette(updated_id + 1)
+        return updated_res, next_prev_overlap, updated_id
+
     def resolve_paths(self, node):
         import re
 
@@ -317,27 +331,17 @@ from a text prompt.
                         # Initialize prev_overlap_detections_bwd with global IDs
                         # by running a trivial assign_global_ids on just frame 0
                         bwd_frame0_only = {frame_idx: bwd_only[frame_idx]}
-                        _, prev_overlap_detections_bwd, next_global_id_bwd = sam3Utils.assign_global_ids(
-                            bwd_frame0_only,
-                            {},
-                            next_global_id_bwd,
-                            similarity_threshold=0.4,
-                            use_mask=True,
+                        _, prev_overlap_detections_bwd, next_global_id_bwd = self._update_global_ids(
+                            bwd_frame0_only, {}, next_global_id_bwd, color_palette
                         )
-                        colorPalette.generate_palette(next_global_id_bwd + 1)
                         logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
 
                         # Initialize merged tracking for n == 0 as well
                         if chunk.node.combineFwdAndBwdSeg.value:
                             merged_frame0_only = {frame_idx: fwd_only[frame_idx]}
-                            fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = sam3Utils.assign_global_ids(
-                                merged_frame0_only,
-                                {},
-                                next_global_id_merged,
-                                similarity_threshold=0.4,
-                                use_mask=True,
+                            fwd_bwd, prev_overlap_detections_merged, next_global_id_merged = self._update_global_ids(
+                                merged_frame0_only, {}, next_global_id_merged, color_palette
                             )
-                            color_palette.generate_palette(next_global_id_merged + 1)
                             logger.info(f"next_global_id_merged = {next_global_id_merged}")
 
                     else:
@@ -346,14 +350,9 @@ from a text prompt.
                         last_frame = frame_idx if n == len(frame_idx_to_text_prompt) - 1 else frame_idx_to_text_prompt[n + 1]
                         fwd = {k: v for k, v in track_fwd.items() if k >= first_frame and k <= last_frame}
 
-                        fwd_only, prev_overlap_detections_fwd, next_global_id_fwd = sam3Utils.assign_global_ids(
-                            fwd,
-                            prev_overlap_detections_fwd,
-                            next_global_id_fwd,
-                            similarity_threshold=0.4,
-                            use_mask=True,
+                        fwd_only, prev_overlap_detections_fwd, next_global_id_fwd = self._update_global_ids(
+                            fwd, prev_overlap_detections_fwd, next_global_id_fwd, color_palette
                         )
-                        color_palette.generate_palette(next_global_id_fwd + 1)
                         logger.info(f"next_global_id_fwd = {next_global_id_fwd}")
 
                         if chunk.node.combineFwdAndBwdSeg.value:
@@ -363,14 +362,9 @@ from a text prompt.
                             last_frame = frame_idx
                             bwd = {k: v for k, v in track_bwd.items() if k >= first_frame and k <= last_frame}
 
-                            bwd_only, prev_overlap_detections_bwd, next_global_id_bwd = sam3Utils.assign_global_ids(
-                                bwd,
-                                prev_overlap_detections_bwd,
-                                next_global_id_bwd,
-                                similarity_threshold=0.4,
-                                use_mask=True,
+                            bwd_only, prev_overlap_detections_bwd, next_global_id_bwd = self._update_global_ids(
+                                bwd, prev_overlap_detections_bwd, next_global_id_bwd, color_palette
                             )
-                            color_palette.generate_palette(next_global_id_bwd + 1)
                             logger.info(f"next_global_id_bwd = {next_global_id_bwd}")
 
                             # Create FRESH copies for merge_tracks since the previous calls cleared the dicts
