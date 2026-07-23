@@ -1,12 +1,14 @@
 __version__ = "1.2"
 
+import copy
 import logging
 import os
 from pathlib import Path
+import re
 
+from pyalicevision import parallelization as avpar
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
-from pyalicevision import parallelization as avpar
 
 logger = logging.getLogger("VideoSegmentationSam3Text")
 
@@ -162,6 +164,7 @@ from a text prompt.
     ]
 
     def _build_output_path(self, node, frame_id, prefix, extension):
+        """ Constructs an absolute output filepath based on the preferred naming methods. """
         if node.keepFilename.value:
             path = str(Path(self.image_paths[frame_id][0]).stem)
         else:
@@ -169,7 +172,7 @@ from a text prompt.
         return os.path.join(node.output.value, prefix + path + extension)
 
     def _update_global_ids(self, results, prev_overlap, next_id, color_palette):
-        """ Helper to assign global IDs and expand the color palette. """
+        """ Assigns global tracking IDs and expands the color palette. """
         from segmentationRDS import sam3Utils
 
         updated_res, next_prev_overlap, updated_id = sam3Utils.assign_global_ids(
@@ -187,11 +190,12 @@ from a text prompt.
         return {k: v for k, v in track_data.items() if start <= k <= end}
 
     def _get_tracking_config(self, node, frame_number):
-        """ Helper to determine frame steps and direction for tracking. """
+        """ Determines directional limits, frame step intervals and slicing logic. """
         frame_idx_to_text_prompt = [0]
         max_frame_num_to_track = None
         track_dir = "forward"
 
+        # Construct frame sequence intervals if time slicing is active
         if node.timeSlicing.value:
             max_frame_num_to_track = node.sliceSize.value
             curr_frame_to_text_prompt = 0
@@ -207,7 +211,7 @@ from a text prompt.
         return frame_idx_to_text_prompt, max_frame_num_to_track, track_dir
 
     def _load_source_images(self):
-        """ Helper to load input images, prepare PIL frames, and extract dimensions. """
+        """ Loads input images, generates baseline empty masks, and indexes camera dimensions. """
         from PIL import Image
         from segmentationRDS import image
         import numpy as np
@@ -217,7 +221,7 @@ from a text prompt.
         source_info = None
 
         for idx, path_data in enumerate(self.image_paths):
-            img, h_ori, w_ori, PAR, orientation = image.loadImage(str(path_data[0]), True)
+            img, h_ori, w_ori, par, orientation = image.loadImage(str(path_data[0]), True)
             pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
 
             # Store source dimensions from the first image (assumed uniform)
@@ -225,7 +229,7 @@ from a text prompt.
                 source_info = {
                     "h_ori": h_ori,
                     "w_ori": w_ori,
-                    "PAR": PAR,
+                    "PAR": par,
                     "orientation": orientation,
                     "shape": img.shape,
                     "dtype": img.dtype
@@ -238,8 +242,8 @@ from a text prompt.
         self,
         node,
         frame_range,
-        direction_name,          # "forward", "backward", "merged"
-        direction_results,       # fwd_only, bwd_only, fwd_bwd
+        direction_name,
+        direction_results,
         text_prompt,
         color_palette,
         source_info,
@@ -305,7 +309,7 @@ from a text prompt.
                 color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
                 color_mask_image[mask] = [x / 255.0 for x in color]
 
-                # Process Cryptomatte hashes (matches old f"{crypto_name}_{dir_prefix}_{int(key)}")
+                # Generate IDs and hash structures for cryptomatte EXRs
                 if output_crypto:
                     obj_name = f"{crypto_name}_{dir_prefix}_{int(key)}"
                     f32_hash, hex_val, _ = image.hash_name(obj_name)
@@ -317,7 +321,7 @@ from a text prompt.
                 bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"])
                 boxes[text_prompt][direction_name][first_frame_id + frame_id][key] = bbox
 
-                # Metadata writes (matches old: "fwd_" + text_prompt + "_" + str(key))
+                # Write the bounding boxes into the frame's metadata
                 x1, y1, x2, y2 = bbox
                 bbox_str = f"{x1};{y1};{x2};{y2}"
                 metadata_boxes[frame_id][text_prompt][direction_name][f"{dir_prefix}_{text_prompt}_{key}"] = bbox_str
@@ -326,8 +330,8 @@ from a text prompt.
             if node.outputColorMasks.value:
                 prefix = f"colorMask_{text_prompt}_{dir_prefix}_"
                 output_file_color_mask = self._build_output_path(node, frame_id, prefix, color_mask_ext)
-                optWrite = avimg.ImageWriteOptions()
-                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                opt_write = avimg.ImageWriteOptions()
+                opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
                 image.writeImage(
                     output_file_color_mask,
                     color_mask_image,
@@ -336,7 +340,7 @@ from a text prompt.
                     source_info["orientation"],
                     source_info["PAR"],
                     metadata_deep_model,
-                    optWrite
+                    opt_write
                 )
 
             # Save Cryptomatte Multichannel EXR
@@ -363,8 +367,7 @@ from a text prompt.
         color_palette,
         combine_fwd_bwd
     ):
-        """ Helper to process and slice forward/backward tracks and update global IDs. """
-        import copy
+        """ Processes temporal tracking slices, resolves global IDs, and manages historical memory. """
         from segmentationRDS import sam3Utils
 
         # Call prepareMasksForVisualization once per raw outputs dictionary to prevent repeating mutating calls
@@ -397,7 +400,8 @@ from a text prompt.
             if combine_fwd_bwd:
                 merged_frame0_only = {frame_idx: fwd_only[frame_idx]}
                 fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = self._update_global_ids(
-                    merged_frame0_only, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"], color_palette
+                    merged_frame0_only, track_states["merged"]["prev_overlap"],
+                    track_states["merged"]["next_id"], color_palette
                 )
                 logger.info(f"next_global_id_merged = {track_states['merged']['next_id']}")
 
@@ -408,7 +412,10 @@ from a text prompt.
         first_frame = frame_idx
 
         # Keep the remaining forward frames on the last segment instead of truncating to frame_idx
-        last_frame = max(track_fwd.keys()) if n == len(frame_idx_to_text_prompt) - 1 else frame_idx_to_text_prompt[n + 1]
+        if n == len(frame_idx_to_text_prompt) - 1:
+            last_frame = max(track_fwd.keys())
+        else:
+            last_frame = frame_idx_to_text_prompt[n + 1]
         fwd = self._slice_track(track_fwd, first_frame, last_frame)
 
         fwd_only, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"] = self._update_global_ids(
@@ -455,8 +462,7 @@ from a text prompt.
         return fwd_only, bwd_only, fwd_bwd
 
     def resolve_paths(self, node):
-        import re
-
+        """ Constructs system template paths mapping to the node output parameters. """
         if node.prompt.value == "":
             raise ValueError("Text prompt is empty.")
 
@@ -466,8 +472,10 @@ from a text prompt.
             raise FileNotFoundError(f"No image files found in {input_path}.")
         self.image_paths = image_paths
 
+        # Parse and sanitize multi-line prompt lists
         self.text_prompts = re.split(r'[\n]+', node.prompt.value)
         self.text_prompts = [str(text_prompt) for text_prompt in self.text_prompts if text_prompt]
+
         src_filename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
 
         color_mask_prefix = node.output.value + "/colorMask_" + self.text_prompts[0]
@@ -520,6 +528,7 @@ from a text prompt.
             pil_images, mask_images, source_info = self._load_source_images()
             source_info["first_frame_id"] = first_frame_id
 
+            # Start tracking session
             response = video_predictor.handle_request(
                 request={"type": "start_session", "resource_path": pil_images}
             )
@@ -534,8 +543,9 @@ from a text prompt.
                 "metadata_boxes": metadata_boxes
             }
 
+            # Run temporal tracking queries per text prompt configuration
             for text_prompt in self.text_prompts:
-                logger.info(f"Text prompt: {text_prompt}")
+                logger.info(f"Processing prompt: {text_prompt}")
 
                 boxes[text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
                 metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = text_prompt
@@ -554,7 +564,8 @@ from a text prompt.
                 }
 
                 for n, frame_idx in enumerate(frame_idx_to_text_prompt):
-                    logger.info(f"text prompt at relative frame {frame_idx} (absolute frame {int(first_frame_id) + frame_idx})")
+                    abs_frame = int(first_frame_id) + frame_idx
+                    logger.info(f"Text prompt at relative frame {frame_idx} (absolute frame {abs_frame})")
 
                     video_predictor.handle_request(
                         request={
@@ -564,7 +575,9 @@ from a text prompt.
                             "text": text_prompt
                         }
                     )
-                    outputs_per_frame[frame_idx] = sam3Utils.propagateInVideo(video_predictor, session_id, frame_idx, max_frame_num_to_track, track_dir)
+                    outputs_per_frame[frame_idx] = sam3Utils.propagateInVideo(video_predictor, session_id,
+                                                                              frame_idx, max_frame_num_to_track,
+                                                                              track_dir)
 
                     fwd_only, bwd_only, fwd_bwd = self._update_tracking_at_step(
                         n=n,
@@ -577,9 +590,10 @@ from a text prompt.
                     )
 
                     # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
-                    last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1] if n < len(frame_idx_to_text_prompt) - 1 else frame_number
-
-                    logger.debug(f"Extract boxes for frame Fwd from : {frame_idx} to {last_frame_idx_fwd - 1}")
+                    last_frame_idx_fwd = frame_number
+                    if n < len(frame_idx_to_text_prompt) - 1:
+                        last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1]
+                    logger.debug(f"Exporting forward boxes from frame index {frame_idx} to {last_frame_idx_fwd - 1}")
 
                     self._export_direction_masks(
                         node=chunk.node,
@@ -625,6 +639,7 @@ from a text prompt.
             prompts = [text_prompt.strip() for text_prompt in self.text_prompts if text_prompt.strip()]
             metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(prompts)
 
+            logger.info("Writing definitive binary masks to disk...")
             for frame_id in range(frame_number):
                 if chunk.node.maskInvert.value:
                     mask = (mask_images[frame_id][:, :, 0:1] == 0).astype('float32')
@@ -633,12 +648,12 @@ from a text prompt.
                 logger.info(f"frame_id: {frame_id} - {self.image_paths[frame_id][0]}")
 
                 output_file_mask = self._build_output_path(chunk.node, frame_id, "", "." + chunk.node.extensionOut.value)
-                optWrite = avimg.ImageWriteOptions()
-                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                opt_write = avimg.ImageWriteOptions()
+                opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
 
                 if Path(output_file_mask).suffix.lower() == ".exr":
-                    optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
-                    optWrite.exrCompressionLevel(300)
+                    opt_write.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                    opt_write.exrCompressionLevel(300)
 
                 frame_metadata_deep_model = dict(metadata_deep_model)
                 for prompt in self.text_prompts:
@@ -646,9 +661,12 @@ from a text prompt.
                         for k, box in metadata_boxes[frame_id][prompt][direction].items():
                             frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
 
-                image.writeImage(output_file_mask, mask, source_info["h_ori"], source_info["w_ori"], source_info["orientation"], source_info["PAR"], frame_metadata_deep_model, optWrite)
+                image.writeImage(output_file_mask, mask, source_info["h_ori"],
+                                 source_info["w_ori"], source_info["orientation"],
+                                 source_info["PAR"], frame_metadata_deep_model, opt_write)
 
             json_filename = chunk.node.output.value + "/bboxes.json"
+            logger.info(f"Writing bounding boxes metadata to {json_filename}")
             with open(json_filename, "w", encoding="utf_8") as file:
                 json.dump(boxes, file, indent=4, ensure_ascii=False)
 
