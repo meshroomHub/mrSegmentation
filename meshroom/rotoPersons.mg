@@ -7,7 +7,7 @@
             "CopyFiles": "1.3",
             "ViTMatte": "1.0",
             "VideoSegmentationSam3Boxes": "4.0",
-            "VideoSegmentationSam3Text": "1.1"
+            "VideoSegmentationSam3Text": "1.2"
         },
         "template": true
     },

@@ -1,35 +1,38 @@
-__version__ = "1.1"
+__version__ = "1.2"
 
+import copy
+import logging
 import os
 from pathlib import Path
+import re
 
+from pyalicevision import parallelization as avpar
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
-from pyalicevision import parallelization as avpar
 
-import logging
 logger = logging.getLogger("VideoSegmentationSam3Text")
 
 class VideoSegmentationSam3Text(desc.Node):
-    size = avpar.DynamicViewsSize("input")
-    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
-
-    category = "Segmentation"
-    documentation = """
+    """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
 from a text prompt.
 """
+    size = avpar.DynamicViewsSize("input")
+    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
+
+    text_prompts = []
+    image_paths = []
+
+    category = "Segmentation"
 
     inputs = [
         desc.File(
             name="input",
-            label="Input",
             description="SfMData file.",
             value="",
         ),
         desc.StringParam(
             name="prompt",
-            label="Prompt",
             description="What to segment, one item per line.",
             value="person",
             semantic="multiline",
@@ -48,7 +51,6 @@ from a text prompt.
         ),
         desc.BoolParam(
             name="timeSlicing",
-            label="Time Slicing",
             description="Enable time slicing by adding text prompt every N frames and Propagating the masks over N frames.\n"
                         "Propagation is forward only by default, or both forward and backward when 'Combine Forward and Backward Segmentation'\n"
                         "is enabled.",
@@ -56,7 +58,6 @@ from a text prompt.
         ),
         desc.IntParam(
             name="sliceSize",
-            label="Slice Size",
             description="Number of frames on which the mask is propagated.",
             value=16,
             enabled=lambda node: node.timeSlicing.value,
@@ -69,13 +70,11 @@ from a text prompt.
         ),
         desc.BoolParam(
             name="outputCryptomatte",
-            label="Output Cryptomatte",
             description="Generate exr images containing cryptomatte to encode the segmentation results.",
             value=False,
         ),
         desc.BoolParam(
             name="outputColorMasks",
-            label="Output Color Masks",
             description="Generate colored masks where colors are linked with object Ids.",
             value=False,
         ),
@@ -88,7 +87,6 @@ from a text prompt.
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -103,7 +101,6 @@ from a text prompt.
         ),
         desc.ChoiceParam(
             name="verboseLevel",
-            label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
             values=VERBOSE_LEVEL,
@@ -120,7 +117,6 @@ from a text prompt.
         ),
         desc.File(
             name="masks",
-            label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
@@ -142,9 +138,17 @@ from a text prompt.
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
         ),
         desc.File(
+            name="colorMasksMerged",
+            label="Colored Masks Merged",
+            description="Colored segmentation masks resulting from merging forward and backward propagation. Colors correspond to instance indexes.",
+            semantic="image",
+            value=None,
+            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
+        ),
+        desc.File(
             name="cryptomatteFwd",
             label="Cryptomatte Forward",
-            description="Cryptomatte resulting from forward propagation embedded in exr images.",
+            description="Cryptomatte resulting from forward propagation embedded in EXR images.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputCryptomatte.value,
@@ -152,42 +156,346 @@ from a text prompt.
         desc.File(
             name="cryptomatteBwd",
             label="Cryptomatte Backward",
-            description="Cryptomatte resulting from backward propagation embedded in exr images.",
+            description="Cryptomatte resulting from backward propagation embedded in EXR images.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputCryptomatte.value and node.combineFwdAndBwdSeg.value,
         ),
     ]
 
-    def resolvePaths(self, node):
-        import re
+    def _build_output_path(self, node, frame_id, prefix, extension):
+        """ Constructs an absolute output filepath based on the preferred naming methods. """
+        if node.keepFilename.value:
+            path = str(Path(self.image_paths[frame_id][0]).stem)
+        else:
+            path = str(self.image_paths[frame_id][1])
+        return os.path.join(node.output.value, prefix + path + extension)
+
+    def _update_global_ids(self, results, prev_overlap, next_id, color_palette):
+        """ Assigns global tracking IDs and expands the color palette. """
+        from segmentationRDS import sam3Utils
+
+        updated_res, next_prev_overlap, updated_id = sam3Utils.assign_global_ids(
+            results,
+            prev_overlap,
+            next_id,
+            similarity_threshold=0.4,
+            use_mask=True,
+        )
+        color_palette.generate_palette(updated_id + 1)
+        return updated_res, next_prev_overlap, updated_id
+
+    def _slice_track(self, track_data, start, end):
+        """ Helper to slice tracking dictionaries between frame bounds. """
+        return {k: v for k, v in track_data.items() if start <= k <= end}
+
+    def _get_tracking_config(self, node, frame_number):
+        """ Determines directional limits, frame step intervals and slicing logic. """
+        frame_idx_to_text_prompt = [0]
+        max_frame_num_to_track = None
+        track_dir = "forward"
+
+        # Construct frame sequence intervals if time slicing is active
+        if node.timeSlicing.value:
+            max_frame_num_to_track = node.sliceSize.value
+            curr_frame_to_text_prompt = 0
+            while curr_frame_to_text_prompt + node.sliceSize.value < frame_number:
+                curr_frame_to_text_prompt += node.sliceSize.value
+                frame_idx_to_text_prompt.append(curr_frame_to_text_prompt)
+
+        if node.combineFwdAndBwdSeg.value:
+            track_dir = "both"
+            if frame_idx_to_text_prompt[-1] < frame_number - 1:
+                frame_idx_to_text_prompt.append(frame_number - 1)
+
+        return frame_idx_to_text_prompt, max_frame_num_to_track, track_dir
+
+    def _load_source_images(self):
+        """ Loads input images, generates baseline empty masks, and indexes camera dimensions. """
+        from PIL import Image
+        from segmentationRDS import image
+        import numpy as np
+
+        pil_images = []
+        mask_images = []
+        source_info = None
+
+        for idx, path_data in enumerate(self.image_paths):
+            img, h_ori, w_ori, par, orientation = image.loadImage(str(path_data[0]), True)
+            pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
+
+            # Store source dimensions from the first image (assumed uniform)
+            if idx == 0:
+                source_info = {
+                    "h_ori": h_ori,
+                    "w_ori": w_ori,
+                    "PAR": par,
+                    "orientation": orientation,
+                    "shape": img.shape,
+                    "dtype": img.dtype
+                }
+            mask_images.append(np.zeros_like(img))
+
+        return pil_images, mask_images, source_info
+
+    def _export_direction_masks(
+        self,
+        node,
+        frame_range,
+        direction_name,
+        direction_results,
+        text_prompt,
+        color_palette,
+        source_info,
+        state,
+        metadata_deep_model
+    ):
+        """ Helper to process results, draw color masks, generate cryptomatte, and save outputs. """
+        from pyalicevision import image as avimg
+        from segmentationRDS import image, sam3Utils
+        import numpy as np
+
+        prefix_map = {
+            "forward": "fwd",
+            "backward": "bwd",
+            "merged": "merged"
+        }
+        dir_prefix = prefix_map[direction_name]
+
+        ext_map = {
+            "forward": ".exr",
+            "backward": ".png",
+            "merged": ".exr"
+        }
+        color_mask_ext = ext_map[direction_name]
+
+        first_frame_id = source_info["first_frame_id"]
+
+        mask_images = state["mask_images"]
+        boxes = state["boxes"]
+        metadata_boxes = state["metadata_boxes"]
+
+        is_definitive = (
+            (node.combineFwdAndBwdSeg.value and direction_name == "merged") or
+            (not node.combineFwdAndBwdSeg.value and direction_name == "forward")
+        )
+
+        write_cryptomatte = (direction_name in ["forward", "backward"])
+        crypto_name = "object" if text_prompt == "" else text_prompt
+
+        for frame_id in frame_range:
+            color_mask_image = np.zeros(source_info["shape"], dtype=source_info["dtype"])
+
+            if (first_frame_id + frame_id) not in boxes[text_prompt][direction_name]:
+                boxes[text_prompt][direction_name][first_frame_id + frame_id] = {}
+
+            output_crypto = write_cryptomatte and node.outputCryptomatte.value
+            if output_crypto:
+                crypto_id = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
+                crypto_cov = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
+                manifest = {}
+
+            # Get detections for current frame (if any)
+            frame_detections = direction_results.get(frame_id, {})
+
+            for key, mask_box_prob in frame_detections.items():
+                mask = mask_box_prob["mask"]
+
+                # Write binary mask corresponding to the definitive pass (forward if no merging, merged otherwise)
+                if is_definitive:
+                    mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
+
+                # Draw visual color mask
+                color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
+                color_mask_image[mask] = [x / 255.0 for x in color]
+
+                # Generate IDs and hash structures for cryptomatte EXRs
+                if output_crypto:
+                    obj_name = f"{crypto_name}_{dir_prefix}_{int(key)}"
+                    f32_hash, hex_val, _ = image.hash_name(obj_name)
+                    manifest[obj_name] = hex_val
+                    crypto_id[mask] = f32_hash
+                    crypto_cov[mask] = 1.0
+
+                # Process Bounding Box mapping
+                bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"])
+                boxes[text_prompt][direction_name][first_frame_id + frame_id][key] = bbox
+
+                # Write the bounding boxes into the frame's metadata
+                x1, y1, x2, y2 = bbox
+                bbox_str = f"{x1};{y1};{x2};{y2}"
+                metadata_boxes[frame_id][text_prompt][direction_name][f"{dir_prefix}_{text_prompt}_{key}"] = bbox_str
+
+            # Save color mask image
+            if node.outputColorMasks.value:
+                prefix = f"colorMask_{text_prompt}_{dir_prefix}_"
+                output_file_color_mask = self._build_output_path(node, frame_id, prefix, color_mask_ext)
+                opt_write = avimg.ImageWriteOptions()
+                opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                image.writeImage(
+                    output_file_color_mask,
+                    color_mask_image,
+                    source_info["h_ori"],
+                    source_info["w_ori"],
+                    source_info["orientation"],
+                    source_info["PAR"],
+                    metadata_deep_model,
+                    opt_write
+                )
+
+            # Save Cryptomatte Multichannel EXR
+            if output_crypto:
+                prefix = f"cryptomatte_{text_prompt}_{dir_prefix}_"
+                cryptomatte_path = self._build_output_path(node, frame_id, prefix, ".exr")
+                image.writeCryptomatte(
+                    cryptomatte_path,
+                    crypto_name,
+                    source_info["w_ori"],
+                    source_info["h_ori"],
+                    manifest,
+                    crypto_id,
+                    crypto_cov
+                )
+
+    def _update_tracking_at_step(
+        self,
+        n,
+        frame_idx,
+        frame_idx_to_text_prompt,
+        outputs_per_frame,
+        track_states,
+        color_palette,
+        combine_fwd_bwd
+    ):
+        """ Processes temporal tracking slices, resolves global IDs, and manages historical memory. """
+        from segmentationRDS import sam3Utils
+
+        # Call prepareMasksForVisualization once per raw outputs dictionary to prevent repeating mutating calls
+        prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+
+        # n == 0: Initialization block
+        if n == 0:
+            # Deep copy to prevent in-place modifications from leaking between lists
+            fwd_only = copy.deepcopy(prepared_track)
+            bwd_only = copy.deepcopy(prepared_track)
+            fwd_bwd = None
+
+            # Properly initialize the Forward global ID tracking at n = 0
+            first_frame = frame_idx
+            last_frame = frame_idx_to_text_prompt[1] if len(frame_idx_to_text_prompt) > 1 else max(fwd_only.keys())
+            fwd = self._slice_track(fwd_only, first_frame, last_frame)
+            fwd_only, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"] = self._update_global_ids(
+                fwd, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"], color_palette
+            )
+            logger.info(f"next_global_id_fwd = {track_states['fwd']['next_id']}")
+
+            # Initialize backward tracking
+            bwd_frame0_only = {frame_idx: bwd_only[frame_idx]}
+            _, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"] = self._update_global_ids(
+                bwd_frame0_only, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"], color_palette
+            )
+            logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
+
+            # Initialize merged tracking if enabled
+            if combine_fwd_bwd:
+                merged_frame0_only = {frame_idx: fwd_only[frame_idx]}
+                fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = self._update_global_ids(
+                    merged_frame0_only, track_states["merged"]["prev_overlap"],
+                    track_states["merged"]["next_id"], color_palette
+                )
+                logger.info(f"next_global_id_merged = {track_states['merged']['next_id']}")
+
+            return fwd_only, bwd_only, fwd_bwd
+
+        # n > 0: Propagation & Merging block
+        track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+        first_frame = frame_idx
+
+        # Keep the remaining forward frames on the last segment instead of truncating to frame_idx
+        if n == len(frame_idx_to_text_prompt) - 1:
+            last_frame = max(track_fwd.keys())
+        else:
+            last_frame = frame_idx_to_text_prompt[n + 1]
+        fwd = self._slice_track(track_fwd, first_frame, last_frame)
+
+        fwd_only, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"] = self._update_global_ids(
+            fwd, track_states["fwd"]["prev_overlap"], track_states["fwd"]["next_id"], color_palette
+        )
+        logger.info(f"next_global_id_fwd = {track_states['fwd']['next_id']}")
+
+        bwd_only = None
+        fwd_bwd = None
+
+        if combine_fwd_bwd:
+            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            first_frame_bwd = frame_idx_to_text_prompt[n - 1]
+            last_frame_bwd = frame_idx
+            bwd = self._slice_track(track_bwd, first_frame_bwd, last_frame_bwd)
+
+            bwd_only, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"] = self._update_global_ids(
+                bwd, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"], color_palette
+            )
+            logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
+
+            # Fresh, completely isolated slice calculations for merge operations
+            prev_prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
+            track_fwd_for_merge = copy.deepcopy(prev_prepared_track)
+            track_bwd_for_merge = copy.deepcopy(prepared_track)
+            fwd_for_merge = self._slice_track(track_fwd_for_merge, first_frame_bwd, last_frame_bwd)
+            bwd_for_merge = self._slice_track(track_bwd_for_merge, first_frame_bwd, last_frame_bwd)
+
+            fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = sam3Utils.merge_tracks(
+                fwd_results=fwd_for_merge,
+                bwd_results=bwd_for_merge,
+                prev_overlap_detections=track_states["merged"]["prev_overlap"],
+                next_global_id=track_states["merged"]["next_id"],
+                similarity_threshold_merge=0.3,
+                similarity_threshold_track=0.4,
+                use_mask=True,
+            )
+            color_palette.generate_palette(track_states["merged"]["next_id"] + 1)
+            logger.info(f"next_global_id_merged = {track_states['merged']['next_id']}")
+
+        # Clear historical frames from memory
+        del outputs_per_frame[frame_idx_to_text_prompt[n - 1]]
+
+        return fwd_only, bwd_only, fwd_bwd
+
+    def resolve_paths(self, node):
+        """ Constructs system template paths mapping to the node output parameters. """
+        if node.prompt.value == "":
+            raise ValueError("Text prompt is empty.")
+
         input_path = node.input.value
         image_paths = get_image_paths_list(input_path)
         if len(image_paths) == 0:
-            raise FileNotFoundError(f'No image files found in {input_path}')
+            raise FileNotFoundError(f"No image files found in {input_path}.")
         self.image_paths = image_paths
-        if node.prompt.value == "":
-            raise ValueError(f'Text prompt is empty')
-        self.textPrompts = re.split(r'[\n]+', node.prompt.value)
-        self.textPrompts = [str(textPrompt) for textPrompt in self.textPrompts if textPrompt]
-        srcFilename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
-        node.colorMasksFwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".exr"
-        node.colorMasksBwd.value = node.output.value + "/colorMask_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
-        node.cryptomatteFwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_fwd_" + srcFilename + ".png"
-        node.cryptomatteBwd.value = node.output.value + "/cryptomatte_" + self.textPrompts[0] + "_bwd_" + srcFilename + ".png"
+
+        # Parse and sanitize multi-line prompt lists
+        self.text_prompts = re.split(r'[\n]+', node.prompt.value)
+        self.text_prompts = [str(text_prompt) for text_prompt in self.text_prompts if text_prompt]
+
+        src_filename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
+
+        color_mask_prefix = node.output.value + "/colorMask_" + self.text_prompts[0]
+        cryptomatte_prefix = node.output.value + "/cryptomatte_" + self.text_prompts[0]
+
+        node.colorMasksFwd.value = color_mask_prefix + "_fwd_" + src_filename + ".exr"
+        node.colorMasksBwd.value = color_mask_prefix + "_bwd_" + src_filename + ".png"
+        node.colorMasksMerged.value = color_mask_prefix + "_merged_" + src_filename + ".exr"
+        node.cryptomatteFwd.value = cryptomatte_prefix + "_fwd_" + src_filename + ".exr"
+        node.cryptomatteBwd.value = cryptomatte_prefix + "_bwd_" + src_filename + ".exr"
 
     def processChunk(self, chunk):
         from segmentationRDS import image, sam3Utils
         from sam3.model_builder import build_sam3_video_predictor
-        import numpy as np
         import torch
         from pyalicevision import image as avimg
-        from PIL import Image
         import json
 
         try:
-
-            self.resolvePaths(chunk.node)
+            self.resolve_paths(chunk.node)
 
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
@@ -197,289 +505,172 @@ from a text prompt.
             if not chunk.node.output.value:
                 return
 
-            logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
-
-            chunk_image_paths = self.image_paths
+            logger.info(f"Chunk range from {chunk.range.start} to {chunk.range.last}")
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
 
             gpus_to_use = [torch.cuda.current_device()]
-            video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
+            video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue,
+                                                         gpus_to_use=gpus_to_use)
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video-TextPrompt"
 
-            pil_images = []
-            mask_images = []
+            color_palette = image.paletteGenerator()
+            first_frame_id = self.image_paths[0][2]
+            frame_number = len(self.image_paths)
 
-            colorPalette = image.paletteGenerator()
-            firstFrameId = chunk_image_paths[0][2]
-            frameNumber = len(chunk_image_paths)
+            frame_idx_to_text_prompt, max_frame_num_to_track, track_dir = self._get_tracking_config(chunk.node, frame_number)
+            logger.info(f"frame_idx_to_text_prompt: {frame_idx_to_text_prompt}; direction = {track_dir}")
 
-            frameIdxToTextPrompt = [0]
-            max_frame_num_to_track = None
-            track_dir = "forward"
-            if chunk.node.timeSlicing.value:
-                max_frame_num_to_track = chunk.node.sliceSize.value
-                currFrameToTextPrompt = 0
-                while currFrameToTextPrompt + chunk.node.sliceSize.value < frameNumber:
-                    currFrameToTextPrompt += chunk.node.sliceSize.value
-                    frameIdxToTextPrompt.append(currFrameToTextPrompt)
-            if chunk.node.combineFwdAndBwdSeg.value:
-                track_dir = "both"
-                if frameIdxToTextPrompt[-1] < frameNumber - 1:
-                    frameIdxToTextPrompt.append(frameNumber - 1)
+            pil_images, mask_images, source_info = self._load_source_images()
+            source_info["first_frame_id"] = first_frame_id
 
-            logger.info(f"frameIdxToTextPrompt: {frameIdxToTextPrompt}; direction = {track_dir}")
-
-            for idx, path in enumerate(chunk_image_paths):
-                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
-                pil_images.append(Image.fromarray((255.0*img).astype("uint8")))
-                sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
-                mask_images.append(np.zeros_like(img))
-
-                if firstFrameId is None or chunk_image_paths[idx][2] is None:
-                    frameId = idx
-                else:
-                    frameId = chunk_image_paths[idx][2] - firstFrameId
-
+            # Start tracking session
             response = video_predictor.handle_request(
-                request=dict(
-                    type="start_session",
-                    resource_path=pil_images,
-                    )
+                request={"type": "start_session", "resource_path": pil_images}
             )
             session_id = response["session_id"]
 
             boxes = {}
-            metadata_boxes = {}
-            for frameId in range(frameNumber):
-                metadata_boxes[frameId] = {}
+            metadata_boxes = {frame_id: {} for frame_id in range(frame_number)}
 
-            for textPrompt in self.textPrompts:
+            tracking_state = {
+                "mask_images": mask_images,
+                "boxes": boxes,
+                "metadata_boxes": metadata_boxes
+            }
 
-                logger.info(f"textPrompt: {textPrompt}")
-                boxes[textPrompt] = {"forward": {}, "backward": {}}
-                cryptoName = "object" if textPrompt == "" else textPrompt
-                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = textPrompt
-                for frameId in range(frameNumber):
-                    metadata_boxes[frameId][textPrompt] = {"forward": {}, "backward": {}}
+            # Run temporal tracking queries per text prompt configuration
+            for text_prompt in self.text_prompts:
+                logger.info(f"Processing prompt: {text_prompt}")
 
-                video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
+                boxes[text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
+                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = text_prompt
+
+                for frame_id in range(frame_number):
+                    metadata_boxes[frame_id][text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
+
+                video_predictor.handle_request(request={"type": "reset_session", "session_id": session_id})
 
                 outputs_per_frame = {}
-                outputs_per_frame_fwd = {}
-                outputs_per_frame_bwd = {}
-                max_obj_id = 0
-                for n, fIdx in enumerate(frameIdxToTextPrompt):
+
+                track_states = {
+                    "fwd": {"prev_overlap": {}, "next_id": 0},
+                    "bwd": {"prev_overlap": {}, "next_id": 0},
+                    "merged": {"prev_overlap": {}, "next_id": 0}
+                }
+
+                for n, frame_idx in enumerate(frame_idx_to_text_prompt):
+                    abs_frame = int(first_frame_id) + frame_idx
+                    logger.info(f"Text prompt at relative frame {frame_idx} (absolute frame {abs_frame})")
+
                     video_predictor.handle_request(
-                        request=dict(
-                            type="add_prompt",
-                            session_id=session_id,
-                            frame_index=fIdx,
-                            text=textPrompt,
-                        )
+                        request={
+                            "type": "add_prompt",
+                            "session_id": session_id,
+                            "frame_index": frame_idx,
+                            "text": text_prompt
+                        }
                     )
-                    outputs_per_frame[fIdx] = sam3Utils.propagateInVideo(video_predictor, session_id, fIdx, max_frame_num_to_track, track_dir)
+                    outputs_per_frame[frame_idx] = sam3Utils.propagateInVideo(video_predictor, session_id,
+                                                                              frame_idx, max_frame_num_to_track,
+                                                                              track_dir)
 
-                    max_obj_id_at_fIdx = 0
-                    for f, obj in outputs_per_frame[fIdx].items():
-                        max_obj_id_at_fIdx_f = -1
-                        if len(obj["out_obj_ids"].tolist()) > 0:
-                            max_obj_id_at_fIdx_f = max(obj["out_obj_ids"].tolist())
-                        if max_obj_id_at_fIdx_f > max_obj_id_at_fIdx:
-                            max_obj_id_at_fIdx = max_obj_id_at_fIdx_f
-                    if max_obj_id_at_fIdx > max_obj_id:
-                        max_obj_id = max_obj_id_at_fIdx
+                    fwd_only, bwd_only, fwd_bwd = self._update_tracking_at_step(
+                        n=n,
+                        frame_idx=frame_idx,
+                        frame_idx_to_text_prompt=frame_idx_to_text_prompt,
+                        outputs_per_frame=outputs_per_frame,
+                        track_states=track_states,
+                        color_palette=color_palette,
+                        combine_fwd_bwd=chunk.node.combineFwdAndBwdSeg.value
+                    )
 
-                    logger.debug(f"max_obj_id = {max_obj_id}")
+                    # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
+                    last_frame_idx_fwd = frame_number
+                    if n < len(frame_idx_to_text_prompt) - 1:
+                        last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1]
+                    logger.debug(f"Exporting forward boxes from frame index {frame_idx} to {last_frame_idx_fwd - 1}")
 
-                    colorPalette.generate_palette(max_obj_id + 1)
-
-                    if n == 0:
-                        outputs_per_frame_fwd[fIdx] = outputs_per_frame[fIdx]
-                        outputs_per_frame_bwd[fIdx] = outputs_per_frame[fIdx]
-                    else:
-
-                        logger.debug(f"Inputs for mapping at key frame {fIdx}")
-                        logger.debug(f"Detected Objects at frame {fIdx}:")
-                        sam3Utils.displayAt(outputs_per_frame, fIdx, fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
-                        logger.debug(f"Propagated Objects at frame {fIdx} from frame {frameIdxToTextPrompt[n - 1]}:")
-                        sam3Utils.displayAt(outputs_per_frame_fwd, frameIdxToTextPrompt[n - 1], fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
-
-                        mapping_fwd = sam3Utils.mapIds(outputs_per_frame[fIdx][fIdx], outputs_per_frame_fwd[frameIdxToTextPrompt[n - 1]][fIdx],
-                                                       logger)
-
-                        logger.debug(f"mapping fwd at key frame {fIdx}:\n{mapping_fwd}")
-
-                        outputs_per_frame_fwd[fIdx] = sam3Utils.updateSam3ObjectIds(outputs_per_frame[fIdx], mapping_fwd)
-
-                        del outputs_per_frame_fwd[frameIdxToTextPrompt[n - 1]]
-
-                        logger.debug(f"Output after mapping fwd has been applied at key frame {fIdx}")
-                        sam3Utils.displayAt(outputs_per_frame_fwd, fIdx, fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
-
-                        if chunk.node.combineFwdAndBwdSeg.value:
-
-                            logger.debug(f"Inputs for mapping at key frame {frameIdxToTextPrompt[n - 1]}")
-                            logger.debug(f"Detected Objects at frame {frameIdxToTextPrompt[n - 1]}:")
-                            sam3Utils.displayAt(outputs_per_frame_bwd, frameIdxToTextPrompt[n - 1], frameIdxToTextPrompt[n - 1], sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
-                            logger.debug(f"Propagated Objects at frame {frameIdxToTextPrompt[n - 1]} from frame {fIdx}:")
-                            sam3Utils.displayAt(outputs_per_frame, fIdx, frameIdxToTextPrompt[n - 1], sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
-
-                            mapping_bwd = sam3Utils.mapIds(outputs_per_frame[fIdx][frameIdxToTextPrompt[n - 1]],
-                                                           outputs_per_frame_bwd[frameIdxToTextPrompt[n - 1]][frameIdxToTextPrompt[n - 1]],
-                                                           logger)
-
-                            logger.debug(f"mapping bwd at key frame {frameIdxToTextPrompt[n - 1]}:\n{mapping_bwd}")
-
-                            outputs_per_frame_bwd[fIdx] = sam3Utils.updateSam3ObjectIds(outputs_per_frame[fIdx], mapping_bwd)
-
-                            del outputs_per_frame_bwd[frameIdxToTextPrompt[n - 1]]
-
-                            logger.debug(f"Output after mapping bwd has been applied at key frame {fIdx}")
-                            sam3Utils.displayAt(outputs_per_frame_bwd, fIdx, fIdx, sourceInfo["w_ori"], sourceInfo["h_ori"], logger)
-
-                        del outputs_per_frame[frameIdxToTextPrompt[n - 1]]
-
-
-                    logger.debug(f"Keys: {outputs_per_frame_fwd[fIdx].keys()}")
-
-                    # write Fwd from fIdx to frameIdxToTextPrompt[n + 1]
-                    lastFIdxFwd = frameIdxToTextPrompt[n + 1] if n < len(frameIdxToTextPrompt) - 1 else frameNumber
-                    outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame_fwd[fIdx])
-
-                    logger.debug(f"Extract boxes for frame Fwd from : {fIdx} to {lastFIdxFwd - 1}")
-
-                    for frameId in range(fIdx, lastFIdxFwd):
-                        colorMaskImageFwd = np.zeros_like(img)
-                        if chunk.node.outputCryptomatte.value:
-                            crypto_id_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                            crypto_cov_fwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                            manifest_fwd = {}
-                        boxes[textPrompt]["forward"][firstFrameId + frameId] = {}
-                        for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
-                            mask = maskBoxProb["mask"]
-                            mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
-                            color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                            colorMaskImageFwd[mask] = [x/255.0 for x in color]
-
-                            if chunk.node.outputCryptomatte.value:
-                                obj_name = f"{cryptoName}_fwd_{int(key)}"
-                                f32_hash, hex_val, _ = image.hash_name(obj_name)
-                                manifest_fwd[obj_name] = hex_val
-                                crypto_id_fwd[mask] = f32_hash
-                                crypto_cov_fwd[mask] = 1.0
-
-                            bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                            boxes[textPrompt]["forward"][firstFrameId + frameId][key] = bbox
-                            x1, y1, x2, y2 = bbox
-                            bbox_str = str(x1) + ";" + str(y1) + ";" + str(x2) + ";" + str(y2)
-                            metadata_boxes[frameId][textPrompt]["forward"]["fwd_" + textPrompt + "_" + str(key)] = bbox_str
-
-                        if chunk.node.outputColorMasks.value:
-                            if chunk.node.keepFilename.value:
-                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                            else:
-                                outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".png")
-
-                            optWrite = avimg.ImageWriteOptions()
-                            optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-
-                            image.writeImage(outputFileColorMask, colorMaskImageFwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
-
-                        if chunk.node.outputCryptomatte.value:
-                            if chunk.node.keepFilename.value:
-                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                            else:
-                                cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_fwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
-
-                            image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_fwd, crypto_id_fwd, crypto_cov_fwd)
+                    self._export_direction_masks(
+                        node=chunk.node,
+                        frame_range=range(frame_idx, last_frame_idx_fwd),
+                        direction_name="forward",
+                        direction_results=fwd_only,
+                        text_prompt=text_prompt,
+                        color_palette=color_palette,
+                        source_info=source_info,
+                        state=tracking_state,
+                        metadata_deep_model=metadata_deep_model
+                    )
 
                     if chunk.node.combineFwdAndBwdSeg.value:
+                        # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
+                        first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
 
-                        # write Bwd from frameIdxToTextPrompt[n - 1] to fIdx
-                        firstFIdxBwd = frameIdxToTextPrompt[n - 1] + 1 if n > 0 else fIdx
-                        outputs_per_frame_visu = sam3Utils.prepareMasksForVisualization(outputs_per_frame_bwd[fIdx])
-                        for frameId in range(firstFIdxBwd, fIdx + 1):
-                            colorMaskImageBwd = np.zeros_like(img)
-                            if chunk.node.outputCryptomatte.value:
-                                crypto_id_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                                crypto_cov_bwd = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
-                                manifest_bwd = {}
-                            boxes[textPrompt]["backward"][firstFrameId + frameId] = {}
-                            for key, maskBoxProb in outputs_per_frame_visu[frameId].items():
-                                mask = maskBoxProb["mask"]
-                                mask_images[frameId][mask] = [(int(key) + 1) * 255, 255, 255]
-                                color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                                colorMaskImageBwd[mask] = [x/255.0 for x in color]
-                                if chunk.node.outputCryptomatte.value:
-                                    obj_name = f"{cryptoName}_bwd_{int(key)}"
-                                    f32_hash, hex_val, _ = image.hash_name(obj_name)
-                                    manifest_bwd[obj_name] = hex_val
-                                    crypto_id_bwd[mask] = f32_hash
-                                    crypto_cov_bwd[mask] = 1.0
-                                bbox = sam3Utils.xywhNorm2xyxy(maskBoxProb["box_xywh"], sourceInfo["w_ori"], sourceInfo["h_ori"]) # (x, y, x+w, y+h)
-                                boxes[textPrompt]["backward"][firstFrameId + frameId][key] = bbox
-                                x1,y1,x2,y2 = bbox
-                                bbox_str = str(x1)+";"+str(y1)+";"+str(x2)+";"+str(y2)
-                                metadata_boxes[frameId][textPrompt]["backward"]["bwd_"+textPrompt+"_"+str(key)] = bbox_str
+                        self._export_direction_masks(
+                            node=chunk.node,
+                            frame_range=range(first_frame_idx_bwd, frame_idx + 1),
+                            direction_name="backward",
+                            direction_results=bwd_only,
+                            text_prompt=text_prompt,
+                            color_palette=color_palette,
+                            source_info=source_info,
+                            state=tracking_state,
+                            metadata_deep_model=metadata_deep_model
+                        )
 
-                            if chunk.node.outputColorMasks.value:
-                                if chunk.node.keepFilename.value:
-                                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
-                                else:
-                                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".png")
+                        if n > 0:
+                            self._export_direction_masks(
+                                node=chunk.node,
+                                frame_range=range(first_frame_idx_bwd - 1, frame_idx + 1),
+                                direction_name="merged",
+                                direction_results=fwd_bwd,
+                                text_prompt=text_prompt,
+                                color_palette=color_palette,
+                                source_info=source_info,
+                                state=tracking_state,
+                                metadata_deep_model=metadata_deep_model
+                            )
 
-                                optWrite = avimg.ImageWriteOptions()
-                                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-
-                                image.writeImage(outputFileColorMask, colorMaskImageBwd, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
-
-                            if chunk.node.outputCryptomatte.value:
-                                if chunk.node.keepFilename.value:
-                                    cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
-                                else:
-                                    cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + textPrompt + "_bwd_" + str(chunk_image_paths[frameId][1]) + ".exr")
-
-                                image.writeCryptomatte(cryptomattePath, cryptoName, img.shape[1], img.shape[0], manifest_bwd, crypto_id_bwd, crypto_cov_bwd)
-
-            prompts = [textPrompt.strip() for textPrompt in self.textPrompts if textPrompt.strip()]
+            prompts = [text_prompt.strip() for text_prompt in self.text_prompts if text_prompt.strip()]
             metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(prompts)
 
-            for frameId in range(frameNumber):
+            logger.info("Writing definitive binary masks to disk...")
+            for frame_id in range(frame_number):
                 if chunk.node.maskInvert.value:
-                    mask = (mask_images[frameId][:,:,0:1] == 0).astype('float32')
+                    mask = (mask_images[frame_id][:, :, 0:1] == 0).astype('float32')
                 else:
-                    mask = (mask_images[frameId][:,:,0:1] > 0).astype('float32')
-                logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
+                    mask = (mask_images[frame_id][:, :, 0:1] > 0).astype('float32')
+                logger.info(f"frame_id: {frame_id} - {self.image_paths[frame_id][0]}")
 
-                if chunk.node.keepFilename.value:
-                    outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
-                else:
-                    outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." + chunk.node.extensionOut.value)
+                output_file_mask = self._build_output_path(chunk.node, frame_id, "", "." + chunk.node.extensionOut.value)
+                opt_write = avimg.ImageWriteOptions()
+                opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
 
-                optWrite = avimg.ImageWriteOptions()
-                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                if Path(outputFileMask).suffix.lower() == ".exr":
-                    optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
-                    optWrite.exrCompressionLevel(300)
+                if Path(output_file_mask).suffix.lower() == ".exr":
+                    opt_write.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                    opt_write.exrCompressionLevel(300)
 
                 frame_metadata_deep_model = dict(metadata_deep_model)
-                for prompt in self.textPrompts:
-                    for direction in ["forward", "backward"]:
-                        for k, box in metadata_boxes[frameId][prompt][direction].items():
+                for prompt in self.text_prompts:
+                    for direction in ["forward", "backward", "merged"]:
+                        for k, box in metadata_boxes[frame_id][prompt][direction].items():
                             frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
 
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
+                image.writeImage(output_file_mask, mask, source_info["h_ori"],
+                                 source_info["w_ori"], source_info["orientation"],
+                                 source_info["PAR"], frame_metadata_deep_model, opt_write)
 
-            jsonFilename = chunk.node.output.value + "/bboxes.json"
-            with open(jsonFilename, "w", encoding="utf_8") as f:
-                json.dump(boxes, f, indent=4, ensure_ascii=False)
+            json_filename = chunk.node.output.value + "/bboxes.json"
+            logger.info(f"Writing bounding boxes metadata to {json_filename}")
+            with open(json_filename, "w", encoding="utf_8") as file:
+                json.dump(boxes, file, indent=4, ensure_ascii=False)
 
-            video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
+            video_predictor.handle_request(request={"type": "close_session", "session_id": session_id})
 
         finally:
             torch.cuda.empty_cache()
@@ -488,17 +679,16 @@ from a text prompt.
 def get_image_paths_list(input_path):
     from pyalicevision import sfmData
     from pyalicevision import sfmDataIO
-    from pathlib import Path
 
     image_paths = []
 
     if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
         if Path(input_path).exists():
-            dataAV = sfmData.SfMData()
-            if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):
-                views = dataAV.getViews()
-                for id, v in views.items():
-                   image_paths.append((Path(v.getImage().getImagePath()), str(id), v.getFrameId()))
+            data = sfmData.SfMData()
+            if sfmDataIO.load(data, input_path, sfmDataIO.ALL):
+                views = data.getViews()
+                for view_id, view in views.items():
+                    image_paths.append((Path(view.getImage().getImagePath()), str(view_id), view.getFrameId()))
 
             image_paths.sort(key=lambda x: x[0])
     else:
