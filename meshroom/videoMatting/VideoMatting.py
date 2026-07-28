@@ -1,18 +1,19 @@
 __version__ = "1.0"
 
+import logging
 import os
 from pathlib import Path
 
+from pyalicevision import parallelization as avpar
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
-from pyalicevision import parallelization as avpar
 
-import logging
-logger = logging.getLogger("VideoMaMa")
+logger = logging.getLogger("VideoMatting")
 
-class VideoMaMa(desc.Node):
+
+class VideoMatting(desc.Node):
     """
-## Matting with VideoMaMa
+Matting node for video sequences.
 """
     size = avpar.DynamicViewsSize("input")
     gpu = lambda node: desc.Level.EXTREME if node.inferenceSize.value == 2048 else desc.Level.INTENSIVE
@@ -22,7 +23,6 @@ class VideoMaMa(desc.Node):
     inputs = [
         desc.File(
             name="input",
-            label="Input",
             description="SfMData file.",
             value="",
         ),
@@ -50,13 +50,11 @@ class VideoMaMa(desc.Node):
         ),
         desc.IntParam(
             name="batchSize",
-            label="Batch Size",
             description="Number of frames process simultaneously.",
             value=16,
         ),
         desc.IntParam(
             name="overlap",
-            label="Overlap",
             description="Number of overlaping frames between 2 consecutive batches. Must be lower than batch size.",
             value=2,
         ),
@@ -75,7 +73,6 @@ class VideoMaMa(desc.Node):
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -107,53 +104,52 @@ class VideoMaMa(desc.Node):
         ),
         desc.File(
             name="matte",
-            label="Matte",
             description="Generated mattes.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
         ),
     ]
 
-    def _resolve_paths(self, pathIn, pathMask, extMask, outDir, keepFilename, extOut):
+    def _resolve_paths(self, input_path, mask_path, mask_ext, output_dir, keep_filename, output_ext):
         from pyalicevision import sfmData, camera
         from pyalicevision import sfmDataIO
-        from pathlib import Path
 
         paths = []
-        inputFileMask = None
-        if not Path(pathIn).exists():
-            raise FileNotFoundError(f"Input path '{pathIn}' does not exist.")
-        if not Path(pathMask).exists():
-            raise FileNotFoundError(f"Input path for masks '{pathMask}' does not exist.")
-        if not Path(pathIn).suffix.lower() in [".sfm", ".abc"]:
-            raise ValueError(f"Input path '{pathIn}' is not a valid sfmData file.")
-        if not os.path.exists(os.path.join(pathMask,"bboxes.json")):
-            raise FileNotFoundError(f'No file containing bounding boxes')
-        
-        dataAV = sfmData.SfMData()
-        if sfmDataIO.load(dataAV, pathIn, sfmDataIO.ALL) and os.path.isdir(outDir):
-            views = dataAV.getViews()
-            for id, v in views.items():
-                inputFile = v.getImage().getImagePath()
-                frameId = v.getFrameId()
-                imgWidth = v.getImage().getWidth()
-                imgHeight = v.getImage().getHeight()
-                intrinsic = dataAV.getIntrinsicSharedPtr(v.getIntrinsicId())
+        input_file_mask = None
+        if not Path(input_path).exists():
+            raise FileNotFoundError(f"Input path '{input_path}' does not exist.")
+        if not Path(mask_path).exists():
+            raise FileNotFoundError(f"Input path for masks '{mask_path}' does not exist.")
+        if Path(input_path).suffix.lower() not in [".sfm", ".abc"]:
+            raise ValueError(f"Input path '{input_path}' is not a valid sfmData file.")
+        if not os.path.exists(os.path.join(mask_path,"bboxes.json")):
+            raise FileNotFoundError("No file containing bounding boxes.")
+
+        av_data = sfmData.SfMData()
+        if sfmDataIO.load(av_data, input_path, sfmDataIO.ALL) and os.path.isdir(output_dir):
+            views = av_data.getViews()
+            for view_id, view in views.items():
+                input_file = view.getImage().getImagePath()
+                frame_id = view.getFrameId()
+                img_width = view.getImage().getWidth()
+                img_height = view.getImage().getHeight()
+                intrinsic = av_data.getIntrinsicSharedPtr(view.getIntrinsicId())
                 pinhole = camera.Pinhole.cast(intrinsic)
                 par = 1.0
                 if pinhole is not None:
                     par = pinhole.getPixelAspectRatio()
-                if keepFilename:
-                    filename = Path(inputFile).stem
-                    if pathMask:
+                if keep_filename:
+                    filename = Path(input_file).stem
+                    if mask_path:
                         mask_filename = "colorMask_%PROMPT%_merged_" + str(filename)
-                        inputFileMask = os.path.join(pathMask, mask_filename + "." + extMask)
-                    outputFileMatte = os.path.join(outDir, filename + "." + extOut)
+                        input_file_mask = os.path.join(mask_path, mask_filename + "." + mask_ext)
+                    output_file_matte = os.path.join(output_dir, filename + "." + output_ext)
                 else:
-                    if pathMask:
-                        inputFileMask = os.path.join(pathMask, str(id) + "." + extMask)
-                    outputFileMatte = os.path.join(outDir, str(id) + "." + extOut)
-                paths.append((inputFile, inputFileMask, frameId, str(id), outputFileMatte, imgWidth, imgHeight, par))
+                    if mask_path:
+                        input_file_mask = os.path.join(mask_path, str(view_id) + "." + mask_ext)
+                    output_file_matte = os.path.join(output_dir, str(view_id) + "." + output_ext)
+                paths.append((input_file, input_file_mask, frame_id, str(view_id), output_file_matte,
+                              img_width, img_height, par))
             paths.sort(key=lambda x: x[0])
 
         return paths
@@ -161,42 +157,42 @@ class VideoMaMa(desc.Node):
     def _padx8_image(self, image):
         import numpy as np
 
-        h, w = image.shape[:2]
-        new_h = (h + 7) // 8 * 8
-        new_w = (w + 7) // 8 * 8
-        pad_h = new_h - h
-        pad_w = new_w - w
-        if pad_h == 0 and pad_w == 0:
+        height, width = image.shape[:2]
+        new_height = (height + 7) // 8 * 8
+        new_width = (width + 7) // 8 * 8
+        pad_height = new_height - height
+        pad_width = new_width - width
+        if pad_height == 0 and pad_width == 0:
             return image
         if image.ndim == 2:
-            return np.pad(image, ((0, pad_h), (0, pad_w)), mode='constant', constant_values=0)
-        else:
-            return np.pad(image, ((0, pad_h), (0, pad_w), (0, 0)), mode='constant', constant_values=0)
+            return np.pad(image, ((0, pad_height), (0, pad_width)), mode="constant", constant_values=0)
+        return np.pad(image, ((0, pad_height), (0, pad_width), (0, 0)), mode="constant", constant_values=0)
 
     def _resize_image(self, image, max_size):
         import cv2
 
-        h, w = image.shape[:2]
+        height, width = image.shape[:2]
         scale = 1.0
         if max_size > 0:
-            max_side = max(h, w)
+            max_side = max(height, width)
             if max_side > max_size:
                 scale = max_size / max_side
 
         if scale < 1.0:
-            new_h = (int(h * scale) // 8) * 8
-            new_w = (int(w * scale) // 8) * 8
-            return "resize", cv2.resize(image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            new_height = (int(height * scale) // 8) * 8
+            new_width = (int(width * scale) // 8) * 8
+            return "resize", cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
 
         return "pad", self._padx8_image(image)
 
     def _restore_image_size(self, image, original_size, method):
         import cv2
-        original_w, original_h = original_size
+
+        original_width, original_height = original_size
         if method == "resize":
-            restored_image = cv2.resize(image, (original_w, original_h), interpolation=cv2.INTER_LINEAR)
+            restored_image = cv2.resize(image, (original_width, original_height), interpolation=cv2.INTER_LINEAR)
         else:
-            restored_image = image[0:original_h, 0:original_w, :]
+            restored_image = image[0:original_height, 0:original_width, :]
         return restored_image
 
     def _generate_time_slices(self, total_frames, batch_size, overlap):
@@ -226,18 +222,18 @@ class VideoMaMa(desc.Node):
             return 0, None
         for (arr1, arr2) in zip(list1, list2):
             if arr1.shape != arr2.shape:
-                raise ValueError("List content don't match.")
+                raise ValueError("List content doesn't match.")
         return len(list1), list1[0].shape
 
     def processChunk(self, chunk):
-        from segmentationRDS import image, bboxUtils, videoMaMaUtils
+        from segmentationRDS import image, bboxUtils, videoMattingUtils
 
+        import copy
         import cv2
         import numpy as np
         import torch
         from pyalicevision import image as avimg
         import OpenImageIO as oiio
-        import copy
 
         try:
             logger.setLevel(chunk.node.verboseLevel.value.upper())
@@ -257,12 +253,12 @@ class VideoMaMa(desc.Node):
                 os.mkdir(chunk.node.output.value)
 
             device = torch.device("cuda") if torch.cuda.is_available() and chunk.node.useGpu.value else torch.device("cpu")
-            model_path = os.getenv("VIDEOMAMA_SR_MODELS_PATH")
+            model_path = os.getenv("VIDEOMATTING_SR_MODELS_PATH")
             if not model_path:
-                raise EnvironmentError("VIDEOMAMA_SR_MODELS_PATH is not set; it must point to the folder containing the same VideoMaMa model files as the ones used in SammieRoto2.")
+                raise EnvironmentError("VIDEOMATTING_SR_MODELS_PATH is not set; it must point to the folder containing the same VideoMatting model files as the ones used in SammieRoto2.")
 
             try:
-                pipeline = videoMaMaUtils.VideoInferencePipeline(
+                pipeline = videoMattingUtils.VideoInferencePipeline(
                     base_model_path=model_path,
                     unet_checkpoint_path=model_path,
                     weight_dtype=torch.float16,
@@ -273,14 +269,14 @@ class VideoMaMa(desc.Node):
                     enable_vae_tiling=False,        # Tiling VAE is not worth it
                     enable_vae_slicing=True,        # Process VAE one image at a time
                 )
-                logger.info(f"Loaded videoMaMa model to {device}")
-            except Exception as e:
-                raise ValueError(f"Error loading VideoMaMa pipeline: {e}")
+                logger.info(f"Loaded VideoMatting model to {device}.")
+            except Exception as err:
+                raise ValueError(f"Error loading VideoMatting pipeline: {err}.")
 
             metadata_deep_model_base = {
-            "Meshroom:mrSegmentation:DeepModelName": "VideoMaMa",
-            "Meshroom:mrSegmentation:DeepModelVersion": "0.1",
-            "Meshroom:mrSegmentation:NodeVersion": "VideoMaMa-" + __version__
+                "Meshroom:mrSegmentation:DeepModelName": "VideoMatting",
+                "Meshroom:mrSegmentation:DeepModelVersion": "0.1",
+                "Meshroom:mrSegmentation:NodeVersion": "VideoMatting-" + __version__
             }
 
             # bboxes.json decoding
@@ -288,34 +284,35 @@ class VideoMaMa(desc.Node):
             frame_w = chunk_image_paths[0][5]
             frame_h = chunk_image_paths[0][6]
             par = chunk_image_paths[0][7]
-            firstFrameId = chunk_image_paths[0][2]
+            first_frame_id = chunk_image_paths[0][2]
             exp_factor = chunk.node.boxExtensionFactor.value
-            bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False, False, exp_factor, par)
-            bboxes_metadata = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False, False, exp_factor, par)
+            bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False,
+                                                False, exp_factor, par)
+            bboxes_metadata = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False,
+                                                         False, exp_factor, par)
             metadata_boxes = {}
-            for frameId in range(len(chunk_image_paths)):
-                metadata_boxes[firstFrameId + frameId] = {}
+            for frame_id in range(len(chunk_image_paths)):
+                metadata_boxes[first_frame_id + frame_id] = {}
 
             logger.debug(f"bboxes.keys() = {bboxes.keys()}")
 
             full_alpha = {}
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
-            sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": p_a_r, "orientation": orientation}
-            for frameId, image_path in enumerate(chunk_image_paths):
+            source_info = {"h_ori": h_ori, "w_ori": w_ori, "PAR": p_a_r, "orientation": orientation}
+            for frame_id, image_path in enumerate(chunk_image_paths):
                 full_alpha[image_path[2]] = np.zeros_like(img)
 
             batch_size = chunk.node.batchSize.value
             overlap = chunk.node.overlap.value
 
-            colorPalette = image.paletteGenerator()
+            color_palette = image.paletteGenerator()
 
             for key, frame_chunks in bboxes.items():
-
                 if "_" in key:
-                    textPrompt, obj_id = key.rsplit('_', 1)
+                    text_prompt, obj_id = key.rsplit('_', 1)
                 else:
-                    textPrompt, obj_id = key, ""
-                logger.info(f"key = {key} ; text prompt = {textPrompt} ; obj_id = {obj_id}")
+                    text_prompt, obj_id = key, ""
+                logger.info(f"key = {key} ; text prompt = {text_prompt} ; obj_id = {obj_id}")
 
                 for frame_chunk in frame_chunks:
                     logger.info(f"frame_chunk:\n{frame_chunk}")
@@ -328,61 +325,61 @@ class VideoMaMa(desc.Node):
                     cond_frames = []
                     mask_frames = []
                     for slice_idx, (slice_start, slice_end) in enumerate(time_slices):
-                        startFrameId = frame_chunk.start_frame + slice_start
-                        stopFrameId = frame_chunk.start_frame + slice_end
-                        logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{startFrameId}, {stopFrameId}[")
+                        start_frame_id = frame_chunk.start_frame + slice_start
+                        stop_frame_id = frame_chunk.start_frame + slice_end
+                        logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{start_frame_id}, {stop_frame_id}[")
                         if slice_idx > 0:
                             if overlap > 0:
                                 cond_frames = cond_frames[-overlap:]
                                 mask_frames = mask_frames[-overlap:]
-                                startFrameId += overlap
+                                start_frame_id += overlap
                             else:
                                 cond_frames = []
                                 mask_frames = []
-                        for frameId, box in frame_chunk.boxes.items():
-                            if frameId >= startFrameId and frameId < stopFrameId:
-                                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
-                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
-                                imgBuf = oiio.ImageBuf(img)
-                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
-                                img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
+                        for frame_id, box in frame_chunk.boxes.items():
+                            if start_frame_id <= frame_id < stop_frame_id:
+                                img, h_ori, w_ori, _, orientation = image.loadImage(str(chunk_image_paths[frame_id - first_frame_id][0]), True)
+                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
+                                img_buf = oiio.ImageBuf(img)
+                                img_buf = oiio.ImageBufAlgo.crop(img_buf, roi=oiio.ROI(x1, x2, y1, y2))
+                                img_crop = img_buf.get_pixels(format=oiio.FLOAT)
                                 method, frame = self._resize_image(img_crop, chunk.node.inferenceSize.value)
                                 resized_h, resized_w = frame.shape[:2]
-                                mask_path = str(chunk_image_paths[frameId - firstFrameId][1])
-                                mask_path = mask_path.replace("%PROMPT%", textPrompt)
-                                colorMask = True
+                                mask_path = str(chunk_image_paths[frame_id - first_frame_id][1])
+                                mask_path = mask_path.replace("%PROMPT%", text_prompt)
+                                color_mask = True
                                 if not os.path.exists(mask_path):
                                     mask_path = mask_path.replace("_merged_", "_fwd_")
                                     if not os.path.exists(mask_path):
-                                        mask_path = mask_path.replace(f"colorMask_{textPrompt}_fwd_", "")
-                                        colorMask = False
-                                mask, h_ori_mask, w_ori_mask, PAR_mask, orientation_mask = image.loadImage(mask_path, True, True, False)
-                                imgBuf = oiio.ImageBuf(mask)
-                                if colorMask:
+                                        mask_path = mask_path.replace(f"colorMask_{text_prompt}_fwd_", "")
+                                        color_mask = False
+                                mask, _, _, _, _ = image.loadImage(mask_path, True, True, False)
+                                img_buf = oiio.ImageBuf(mask)
+                                if color_mask:
                                     mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
                                     color_index = 0 if obj_id=="" else int(obj_id)
-                                    colorPalette.generate_palette(color_index + 1)
-                                    tgt = colorPalette.at(color_index)
+                                    color_palette.generate_palette(color_index + 1)
+                                    tgt = color_palette.at(color_index)
                                     mask_id = np.zeros_like(img, dtype=np.float32)
                                     mask_id[(mask_uint8 == tgt).all(axis = -1)] = [1.0, 1.0, 1.0]
-                                    imgBuf = oiio.ImageBuf(mask_id)
-                                    
-                                imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
-                                img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
+                                    img_buf = oiio.ImageBuf(mask_id)
+
+                                img_buf = oiio.ImageBufAlgo.crop(img_buf, roi=oiio.ROI(x1, x2, y1, y2))
+                                img_crop = img_buf.get_pixels(format=oiio.FLOAT)
                                 if method == "resize":
                                     mask = cv2.resize(img_crop, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST)
                                 else:
                                     mask = self._padx8_image(img_crop)
                                 cond_frames.append(frame)
                                 mask_frames.append(mask)
-                        nb, sh = self._check_lists_compatibility(cond_frames, mask_frames)
-                        logger.info(f"slice_idx = {slice_idx} ; {nb} frames ; shape = {sh} ; method = {method}")
+                        nb_frames, shape = self._check_lists_compatibility(cond_frames, mask_frames)
+                        logger.info(f"slice_idx = {slice_idx} ; {nb_frames} frames ; shape = {shape} ; method = {method}")
 
                         try:
                             with torch.amp.autocast('cuda', enabled=False):
                                 output_frames = pipeline.run(cond_frames=cond_frames, mask_frames=mask_frames, seed=42)
                         except Exception as ex:
-                            logger.error(f"Error in VideoMaMa inference at slice {slice_idx}: {ex}")
+                            logger.error(f"Error in VideoMatting inference at slice {slice_idx}: {ex}")
                             raise
 
                         if slice_idx == 0:
@@ -398,49 +395,48 @@ class VideoMaMa(desc.Node):
                             previous_frames = copy.deepcopy(output_frames[-overlap:])
 
                         if slice_idx > 0:
-                            startFrameId -= overlap
+                            start_frame_id -= overlap
                         if slice_idx < len(time_slices) - 1:
-                            stopFrameId -= overlap
+                            stop_frame_id -= overlap
 
-                        for frameId, box in sorted(frame_chunk.boxes.items()):
-                            if frameId >= startFrameId and frameId < stopFrameId:
-                                frame_idx = frameId - startFrameId
+                        for frame_id, box in sorted(frame_chunk.boxes.items()):
+                            if frame_id >= start_frame_id and frame_id < stop_frame_id:
+                                frame_idx = frame_id - start_frame_id
                                 if frame_idx < batch_size - overlap or slice_idx == len(time_slices) - 1:
-                                    x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
+                                    x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
                                     box_w = x2 - x1
                                     box_h = y2 - y1
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
                                     alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
-                                    full_alpha[frameId][y1:y2, x1:x2, :] = np.maximum(alpha, full_alpha[frameId][y1:y2, x1:x2, :])
+                                    full_alpha[frame_id][y1:y2, x1:x2, :] = np.maximum(alpha, full_alpha[frame_id][y1:y2, x1:x2, :])
 
             for key, frame_chunks in bboxes_metadata.items():
                 if "_" in key:
-                    textPrompt, obj_id = key.rsplit('_', 1)
+                    text_prompt, obj_id = key.rsplit('_', 1)
                 else:
-                    textPrompt, obj_id = key, ""
+                    text_prompt, obj_id = key, ""
                 for frame_chunk in frame_chunks:
                     for frame_idx, box in sorted(frame_chunk.boxes.items()):
-                        if textPrompt not in metadata_boxes[frame_idx]:
-                            metadata_boxes[frame_idx][textPrompt] = {}
+                        if text_prompt not in metadata_boxes[frame_idx]:
+                            metadata_boxes[frame_idx][text_prompt] = {}
                         x1, y1, x2, y2 = box
                         bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
-                        metadata_boxes[frame_idx][textPrompt][textPrompt + "_" + str(obj_id)] = bbox_str
+                        metadata_boxes[frame_idx][text_prompt][text_prompt + "_" + str(obj_id)] = bbox_str
 
-            for frameId, image_path in enumerate(chunk_image_paths):
-
-                optWrite = avimg.ImageWriteOptions()
-                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+            for frame_id, image_path in enumerate(chunk_image_paths):
+                opt_write = avimg.ImageWriteOptions()
+                opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
                 if Path(image_path[4]).suffix.lower() == ".exr":
-                    optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
-                    optWrite.exrCompressionLevel(300)
+                    opt_write.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                    opt_write.exrCompressionLevel(300)
 
                 frame_metadata_deep_model = dict(metadata_deep_model_base)
-                for prompt, bboxes in metadata_boxes[firstFrameId + frameId].items():
+                for _, bboxes in metadata_boxes[first_frame_id + frame_id].items():
                     for k, box in bboxes.items():
                         frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
                 alpha = full_alpha[image_path[2]]
-                image.writeImage(image_path[4], alpha, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
-                                sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
+                image.writeImage(image_path[4], alpha, source_info["h_ori"], source_info["w_ori"], source_info["orientation"],
+                                source_info["PAR"], frame_metadata_deep_model, opt_write)
 
         finally:
             torch.cuda.empty_cache()
