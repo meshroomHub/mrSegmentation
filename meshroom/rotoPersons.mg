@@ -6,8 +6,8 @@
             "CameraInit": "12.1",
             "CopyFiles": "1.3",
             "ViTMatte": "1.0",
-            "VideoSegmentationSam3Boxes": "4.0",
-            "VideoSegmentationSam3Text": "1.2"
+            "VideoSegmentationSam3Boxes": "5.0",
+            "VideoSegmentationSam3Text": "2.0"
         },
         "template": true
     },
@@ -64,8 +64,10 @@
             ],
             "inputs": {
                 "input": "{CameraInit_1.output}",
+                "combineFwdAndBwdSeg": true,
                 "timeSlicing": true,
-                "sliceSize": 64
+                "sliceSize": 64,
+                "outputCryptomatte": true
             }
         }
     }

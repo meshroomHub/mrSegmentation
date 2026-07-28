@@ -1,4 +1,4 @@
-__version__ = "1.2"
+__version__ = "2.0"
 
 import copy
 import logging
@@ -14,8 +14,8 @@ logger = logging.getLogger("VideoSegmentationSam3Text")
 
 class VideoSegmentationSam3Text(desc.Node):
     """
-Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
-from a text prompt.
+Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr
+cryptomatte from a text prompt.
 """
     size = avpar.DynamicViewsSize("input")
     gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
@@ -52,8 +52,8 @@ from a text prompt.
         desc.BoolParam(
             name="timeSlicing",
             description="Enable time slicing by adding text prompt every N frames and Propagating the masks over N frames.\n"
-                        "Propagation is forward only by default, or both forward and backward when 'Combine Forward and Backward Segmentation'\n"
-                        "is enabled.",
+                        "Propagation is forward only by default, or both forward and backward when 'Combine Forward \n"
+                        "and Backward Segmentation' is enabled.",
             value=False,
         ),
         desc.IntParam(
@@ -63,9 +63,24 @@ from a text prompt.
             enabled=lambda node: node.timeSlicing.value,
         ),
         desc.BoolParam(
+            name="enableBonding",
+            label="Enable Masks Bonding",
+            description="Enable bonding where instances overlap.",
+            value=True,
+        ),
+        desc.IntParam(
+            name="bondingKernelSize",
+            label="Bonding Kernel Size",
+            description="Kernel size for morphological processing applied for masks bonding.",
+            value=11,
+            range=(1, 255, 2),
+            enabled=lambda node: node.enableBonding.value,
+        ),
+        desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
-            description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
+            description="Invert mask values.\n"
+                        "If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
             value=False,
         ),
         desc.BoolParam(
@@ -124,7 +139,8 @@ from a text prompt.
         desc.File(
             name="colorMasksFwd",
             label="Colored Masks Forward",
-            description="Colored segmentation masks resulting from forward propagation. Colors correspond to instance indexes.",
+            description="Colored segmentation masks resulting from forward propagation.\n"
+                        "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value,
@@ -132,7 +148,8 @@ from a text prompt.
         desc.File(
             name="colorMasksBwd",
             label="Colored Masks Backward",
-            description="Colored segmentation masks resulting from backward propagation. Colors correspond to instance indexes.",
+            description="Colored segmentation masks resulting from backward propagation.\n"
+                        "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
@@ -140,7 +157,8 @@ from a text prompt.
         desc.File(
             name="colorMasksMerged",
             label="Colored Masks Merged",
-            description="Colored segmentation masks resulting from merging forward and backward propagation. Colors correspond to instance indexes.",
+            description="Colored segmentation masks resulting from merging forward and backward propagation.\n"
+                        "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
@@ -298,8 +316,10 @@ from a text prompt.
             # Get detections for current frame (if any)
             frame_detections = direction_results.get(frame_id, {})
 
+            masks = []
             for key, mask_box_prob in frame_detections.items():
                 mask = mask_box_prob["mask"]
+                masks.append(mask.squeeze())
 
                 # Write binary mask corresponding to the definitive pass (forward if no merging, merged otherwise)
                 if is_definitive:
@@ -325,6 +345,16 @@ from a text prompt.
                 x1, y1, x2, y2 = bbox
                 bbox_str = f"{x1};{y1};{x2};{y2}"
                 metadata_boxes[frame_id][text_prompt][direction_name][f"{dir_prefix}_{text_prompt}_{key}"] = bbox_str
+
+            if masks:
+                masks_stack = np.stack(masks, axis=0)
+                mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1)
+                if len(masks) > 1 and node.enableBonding.value:
+                    ks = node.bondingKernelSize.value
+                    mask_global = np.expand_dims(sam3Utils.bond_masks(masks, ks, ks, ks), axis=-1)
+                if is_definitive:
+                    mask_images[frame_id] = mask_global
+
 
             # Save color mask image
             if node.outputColorMasks.value:

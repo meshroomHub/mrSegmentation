@@ -1,5 +1,6 @@
-__version__ = "1.0"
+__version__ = "2.0"
 
+import logging
 import os
 from pathlib import Path
 import struct
@@ -8,31 +9,31 @@ from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 from pyalicevision import parallelization as avpar
 
-import logging
 logger = logging.getLogger("VideoSegmentationSam3")
 
 class VideoSegmentationSam3(desc.Node):
+    """
+Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
+from a text prompt, a single bounding box or a set of positive and negative clicks (Clicks In/Out).
+
+Text prompt and Clicks can be combined to refine results. For refinement, points must be associated to an existing submask.
+In order to associate a point to a given submask, it must be colored with the submask's color.
+"""
     size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.EXTREME
 
     category = "Segmentation"
-    documentation = """
-Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
-from a text prompt, a single bounding box or a set of positive and negative clicks (Clicks In/Out).
-Text prompt and Clicks can be combined to refine results. For refinement, points must be associated to an existing submask.
-In order to associate a point to a given submask, it must be colored with the submask's color.
-"""
+
+    image_paths = []
 
     inputs = [
         desc.File(
             name="input",
-            label="Input",
             description="SfMData file.",
             value="",
         ),
         desc.StringParam(
             name="prompt",
-            label="Prompt",
             description="What to segment, separated by point or one item per line.",
             value="person",
             semantic="multiline",
@@ -51,16 +52,27 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.BoolParam(
             name="timeSlicing",
-            label="Time Slicing",
             description="Enable time slicing by adding text prompt every N frames and by propagating forward on N frames.",
             value=False,
         ),
         desc.IntParam(
             name="sliceSize",
-            label="Slice Size",
             description="Number of frames on which the mask is propagated.",
             value=16,
             enabled=lambda node: node.timeSlicing.value,
+        ),
+        desc.BoolParam(
+            name="enableBonding",
+            label="Enable Masks Bonding",
+            description="Enable bonding where instances overlap.",
+            value=True,
+        ),
+        desc.IntParam(
+            name="bondingKernelSize",
+            description="Kernel size for morphological processing applied for masks bonding.",
+            value=11,
+            range=(1, 255, 2),
+            enabled=lambda node: node.enableBonding.value,
         ),
         desc.BoolParam(
             name="maskInvert",
@@ -70,7 +82,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.BoolParam(
             name="outputCryptomatte",
-            label="Output Cryptomatte",
             description="Generate exr images containing cryptomatte to encode the segmentation results.",
             value=False,
         ),
@@ -83,7 +94,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -122,14 +132,12 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.Rectangle(
             name="boxPrompt",
-            label="Box Prompt",
             description="Single bounding box used as initial prompt.",
             keyable=True,
             keyType="viewId"
         ),
         desc.ChoiceParam(
             name="verboseLevel",
-            label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
             values=VERBOSE_LEVEL,
@@ -146,7 +154,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.File(
             name="masks",
-            label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
@@ -160,7 +167,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.File(
             name="cryptomatte",
-            label="Cryptomatte",
             description="Cryptomatte embedded in exr images.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
@@ -283,7 +289,7 @@ In order to associate a point to a given submask, it must be colored with the su
 
     def processChunk(self, chunk):
         import json
-        from segmentationRDS import image
+        from segmentationRDS import image, sam3Utils
         from sam3.model_builder import build_sam3_video_predictor
         import numpy as np
         import torch
@@ -292,9 +298,7 @@ In order to associate a point to a given submask, it must be colored with the su
         import OpenImageIO as oiio
 
         try:
-
             self.resolvePaths(chunk.node)
-            
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
             if not chunk.node.input:
@@ -350,10 +354,10 @@ In order to associate a point to a given submask, it must be colored with the su
 
             logger.debug(f"frameIdxToTextPromptFwd: {frameIdxToTextPrompt_fwd}")
             logger.debug(f"frameIdxToTextPromptBwd: {frameIdxToTextPrompt_bwd}")
-            
-            for idx, path in enumerate(chunk_image_paths):
+
+            for idx, _ in enumerate(chunk_image_paths):
                 img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
-                pil_images.append(Image.fromarray((255.0*img).astype("uint8")))
+                pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
                 sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
 
                 viewId = chunk_image_paths[idx][1]
@@ -462,8 +466,16 @@ In order to associate a point to a given submask, it must be colored with the su
                 if len(masks.keys()) > 0:
                     colorPalette.generate_palette(max(masks.keys()) + 1)
                 cryptoName = "object" if prompt == "" else prompt
+
+                if masks.keys():
+                    masks_stack = np.stack(list(masks.values()), axis=0)
+                    bool_mask = np.sum(masks_stack, axis=0) > 0
+                    if len(masks.values()) > 1 and chunk.node.enableBonding.value:
+                        ks = chunk.node.bondingKernelSize.value
+                        bool_mask = sam3Utils.bond_masks(list(masks.values()), ks, ks, ks) > 0
+                    maskImage[bool_mask] = [255, 255, 255]
+
                 for key, mask in masks.items():
-                    maskImage[mask] = [255, 255, 255]
                     color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
                     colorMaskImage[mask] = [x/255.0 for x in color]
                     if chunk.node.outputCryptomatte.value:
@@ -472,14 +484,21 @@ In order to associate a point to a given submask, it must be colored with the su
                         manifest[obj_name] = hex_val
                         crypto_id[mask] = f32_hash
                         crypto_cov[mask] = 1.0
+
                 if frameId in outputs_per_frame_bwd.keys():
-                    for key, mask in outputs_per_frame_bwd[frameId].items():
-                        maskImage[mask] = [255, 255, 255]
+                    if outputs_per_frame_bwd[frameId].keys():
+                        masks_stack = np.stack(list(outputs_per_frame_bwd[frameId].values()), axis=0)
+                        bool_mask = np.sum(masks_stack, axis=0) > 0
+                        if len(outputs_per_frame_bwd[frameId].values()) > 1 and chunk.node.enableBonding.value:
+                            ks = chunk.node.bondingKernelSize.value
+                            bool_mask = sam3Utils.bond_masks(list(outputs_per_frame_bwd[frameId].values()), ks, ks, ks) > 0
+                        maskImage[bool_mask] = [255, 255, 255]
 
                 if chunk.node.outputCryptomatte.value:
                     spec = oiio.ImageSpec(img.shape[1], img.shape[0], 7, oiio.FLOAT)
-                    spec.channelnames = (cryptoName+".red", cryptoName+".green", cryptoName+".blue",
-                                        cryptoName+"00.red", cryptoName+"00.green", cryptoName+"00.blue", cryptoName+"00.alpha")
+                    spec.channelnames = (cryptoName + ".red", cryptoName + ".green", cryptoName + ".blue",
+                                         cryptoName + "00.red", cryptoName + "00.green", cryptoName + "00.blue",
+                                         cryptoName + "00.alpha")
                     _, _, h32 = self.hash_name(cryptoName)
                     crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
                     spec.attribute(f"cryptomatte/{crypto_key}/name", cryptoName)
@@ -488,28 +507,35 @@ In order to associate a point to a given submask, it must be colored with the su
                     spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
 
                     if chunk.node.keepFilename.value:
-                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
+                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" +
+                                                       str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
                     else:
-                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" + str(chunk_image_paths[frameId][1]) + ".exr")
+                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" +
+                                                       str(chunk_image_paths[frameId][1]) + ".exr")
 
                     cryptomatteImg = oiio.ImageOutput.create(str(cryptomattePath))
                     cryptomatteImg.open(cryptomattePath, spec)
-                    cryptomatte_data = np.dstack((crypto_zeros, crypto_zeros, crypto_zeros, crypto_id, crypto_cov, crypto_zeros, crypto_zeros))
+                    cryptomatte_data = np.dstack((crypto_zeros, crypto_zeros, crypto_zeros, crypto_id, crypto_cov,
+                                                  crypto_zeros, crypto_zeros))
                     cryptomatteImg.write_image(cryptomatte_data)
                     cryptomatteImg.close()
 
                 if chunk.node.maskInvert.value:
-                    mask = (maskImage[:,:,0:1] == 0).astype('float32')
+                    mask = (maskImage[:, :, 0:1] == 0).astype('float32')
                 else:
-                    mask = (maskImage[:,:,0:1] > 0).astype('float32')
-                logger.info("frameId: {} - {}".format(frameId, chunk_image_paths[frameId][0]))
+                    mask = (maskImage[:, :, 0:1] > 0).astype('float32')
+                logger.info(f"frameId: {frameId} - {chunk_image_paths[frameId][0]}")
 
                 if chunk.node.keepFilename.value:
-                    outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem + "." + chunk.node.extensionOut.value)
-                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
+                    outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem +
+                                                  "." + chunk.node.extensionOut.value)
+                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" +
+                                                       str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
                 else:
-                    outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." + chunk.node.extensionOut.value)
-                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" + str(chunk_image_paths[frameId][1]) + ".png")
+                    outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." +
+                                                  chunk.node.extensionOut.value)
+                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" +
+                                                       str(chunk_image_paths[frameId][1]) + ".png")
 
                 optWrite = avimg.ImageWriteOptions()
                 optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
@@ -517,8 +543,10 @@ In order to associate a point to a given submask, it must be colored with the su
                     optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
                     optWrite.exrCompressionLevel(300)
 
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
-                image.writeImage(outputFileColorMask, colorMaskImage, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"],
+                                 sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                image.writeImage(outputFileColorMask, colorMaskImage, sourceInfo["h_ori"], sourceInfo["w_ori"],
+                                 sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
 
         finally:
             torch.cuda.empty_cache()
@@ -527,7 +555,6 @@ In order to associate a point to a given submask, it must be colored with the su
 def get_image_paths_list(input_path):
     from pyalicevision import sfmData
     from pyalicevision import sfmDataIO
-    from pathlib import Path
 
     image_paths = []
 
@@ -536,8 +563,8 @@ def get_image_paths_list(input_path):
             dataAV = sfmData.SfMData()
             if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):
                 views = dataAV.getViews()
-                for id, v in views.items():
-                   image_paths.append((Path(v.getImage().getImagePath()), str(id), v.getFrameId()))
+                for vId, v in views.items():
+                    image_paths.append((Path(v.getImage().getImagePath()), str(vId), v.getFrameId()))
 
             image_paths.sort(key=lambda x: x[0])
     else:

@@ -1,4 +1,4 @@
-__version__ = "1.0"
+__version__ = "2.0"
 
 import os
 from pathlib import Path
@@ -8,27 +8,28 @@ from meshroom.core.utils import VERBOSE_LEVEL
 from pyalicevision import parallelization as avpar
 
 class ImageSegmentationSam3(desc.Node):
+    """
+Based on the Segment Anything model 3, the node generates a binary mask from a text prompt and a set of bounding boxes.
+The bounding boxes can be provided through a JSON file and loaded by clicking on a push button or manualy defined on the
+2D viewer.
+
+When loaded from a JSON file containing rectangle shapes, the lowered shape name must contains the substring "pos" for the
+positive bounding boxes and "neg" for the negative ones.
+"""
     size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
     category = "Segmentation"
-    documentation = """
-Based on the Segment Anything model 3, the node generates a binary mask from a text prompt and a set of bounding boxes.
-The bounding boxes can be provided through a json file and loaded by clicking on a push button or manualy defined on the 2D viewer.
-When loaded from a json file containing rectangle shapes, the lowered shape name must contains the substring "pos" for the positive bounding boxes and "neg" for the negative ones.
-"""
 
     inputs = [
         desc.File(
             name="input",
-            label="Input",
             description="SfMData file.",
             value="",
         ),
         desc.StringParam(
             name="prompt",
-            label="Prompt",
             description="Text prompt, 1 concept per line.",
             value="person\nchild\npeople",
             semantic="multiline",
@@ -52,9 +53,23 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             value="${RDS_SAM3_MODEL_PATH}",
         ),
         desc.BoolParam(
+            name="enableBonding",
+            label="Enable Masks Bonding",
+            description="Enable bonding where instances overlap.",
+            value=True,
+        ),
+        desc.IntParam(
+            name="bondingKernelSize",
+            description="Kernel size for morphological processing applied for masks bonding.",
+            value=11,
+            range=(1, 255, 2),
+            enabled=lambda node: node.enableBonding.value,
+        ),
+        desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
-            description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
+            description="Invert mask values. \n"
+                        "If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
             value=False,
         ),
         desc.BoolParam(
@@ -66,7 +81,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -81,17 +95,9 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
         ),
         desc.BoolParam(
             name="splitBoxPrompt",
-            label="Split Box Prompt",
-            description="Reset detector before feeding with a new positive box and merge results. Negative boxes will be ignored.",
+            description="Reset detector before feeding with a new positive box and merge results.\n"
+                        "Negative boxes will be ignored.",
             value=False,
-        ),
-        desc.ChoiceParam(
-            name="verboseLevel",
-            label="Verbose Level",
-            description="Verbosity level (fatal, error, warning, info, debug).",
-            value="info",
-            values=VERBOSE_LEVEL,
-            exclusive=True,
         ),
         desc.ShapeList(
             name="positiveBoxes",
@@ -117,6 +123,13 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
                 keyType="viewId",
             ),
         ),
+        desc.ChoiceParam(
+            name="verboseLevel",
+            description="Verbosity level (fatal, error, warning, info, debug).",
+            value="info",
+            values=VERBOSE_LEVEL,
+            exclusive=True,
+        ),
     ]
 
     outputs = [
@@ -128,7 +141,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
         ),
         desc.File(
             name="masks",
-            label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
@@ -137,7 +149,7 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
 
     def onBboxLoadClicked(self, node):
         import json
-        from pathlib import Path
+
         if node.bboxFolder.value:
             shapeFiles = list(Path(node.bboxFolder.value).glob("*shapes.json"))
             if len(shapeFiles) > 0:
@@ -167,7 +179,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
     def resolvedPaths(self, input_path, outDir, keepFilename, extensionOut):
         from pyalicevision import sfmData
         from pyalicevision import sfmDataIO
-        from pathlib import Path
 
         paths = {}
         if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
@@ -175,16 +186,16 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
                 dataAV = sfmData.SfMData()
                 if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL) and os.path.isdir(outDir):
                     views = dataAV.getViews()
-                    for id, v in views.items():
+                    for vId, v in views.items():
                         inputFile = v.getImage().getImagePath()
                         frameId = v.getFrameId()
                         if keepFilename:
                             outputFileMask = os.path.join(outDir, Path(inputFile).stem + "." + extensionOut)
                             outputFileBoxes = os.path.join(outDir, "bboxes_" + Path(inputFile).stem + ".jpg")
                         else:
-                            outputFileMask = os.path.join(outDir, str(id) + "." + extensionOut)
-                            outputFileBoxes = os.path.join(outDir, "bboxes_" + str(id) + ".jpg")
-                        paths[inputFile] = (outputFileMask, outputFileBoxes, frameId, str(id))
+                            outputFileMask = os.path.join(outDir, str(vId) + "." + extensionOut)
+                            outputFileBoxes = os.path.join(outDir, "bboxes_" + str(vId) + ".jpg")
+                        paths[inputFile] = (outputFileMask, outputFileBoxes, frameId, str(vId))
 
         return paths
 
@@ -238,11 +249,18 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
                 "height": xyxy[3] - xyxy[1]
                 }}
 
-    def updateMaskImageAndDetectedBboxes(self, inference_state, maskImage, detectedBBoxes, key, w_ori, h_ori, PAR, orientation):
-        from segmentationRDS import image
-        masks, boxes, scores = inference_state["masks"], inference_state["boxes"], inference_state["scores"]
-        for mask in masks:
-            maskImage[mask.squeeze(0).cpu()] = [255, 255, 255]
+    def updateMaskImageAndDetectedBboxes(self, inference_state, maskImage, detectedBBoxes, key,
+                                         w_ori, h_ori, PAR, orientation, ks_bond = 0):
+        from segmentationRDS import image, sam3Utils
+        import numpy as np
+        masks, boxes = inference_state["masks"], inference_state["boxes"]
+        masks = [mask.squeeze(0).cpu().numpy() for mask in masks]
+        if masks:
+            masks_stack = np.stack(masks, axis=0)
+            bool_mask = np.sum(masks_stack, axis=0) > 0
+            if len(masks) > 1 and ks_bond > 0:
+                bool_mask = sam3Utils.bond_masks(masks, ks_bond, ks_bond, ks_bond) > 0
+            maskImage[bool_mask] = [255, 255, 255]
         for idx, box in enumerate(boxes):
             x1, y1, x2, y2 = box.cpu().tolist()
             x1, y1 = image.fromUsualToRawOrientation(x1, y1, w_ori, h_ori, PAR, orientation)
@@ -290,7 +308,8 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
 
             chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
-            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value, chunk.node.keepFilename.value, chunk.node.extensionOut.value)
+            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value,
+                                          chunk.node.keepFilename.value, chunk.node.extensionOut.value)
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
@@ -313,13 +332,13 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
             detectedShapeBboxes = []
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
-                if k >= chunk.range.start and k <= chunk.range.last:
+                if chunk.range.start <= k <= chunk.range.last:
                     img, h_ori, w_ori, PAR, orientation = image.loadImage(iFile, True)
                     frameId = oFile[2]
                     viewId = oFile[3]
                     key = iFile if viewId == "not_a_view" else viewId
 
-                    chunk.logger.info("frameId: {} - {}".format(frameId, iFile))
+                    chunk.logger.info(f"frameId: {frameId} - {iFile}")
 
                     bboxes = []
                     bboxLabels = []
@@ -349,21 +368,24 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
                         inference_state = processor.set_text_prompt(state=inference_state, prompt=textPrompt)
                         # Get the masks, bounding boxes, and scores
                         if "masks" in inference_state:
-                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation)
+                            ks_bond = chunk.node.bondingKernelSize.value if chunk.node.enableBonding.value else 0
+                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation, ks_bond)
 
-                    if not chunk.node.splitBoxPrompt:
+                    if not chunk.node.splitBoxPrompt.value:
                         processor.reset_all_prompts(state=inference_state)
                     for box, label in zip(bboxes, bboxLabels):
                         # Prompt the model with bboxes
-                        if chunk.node.splitBoxPrompt:
+                        if chunk.node.splitBoxPrompt.value:
                             processor.reset_all_prompts(state=inference_state)
                         inference_state = processor.add_geometric_prompt(state=inference_state, box=box, label=label)
                         # Get the masks, bounding boxes, and scores
-                        if "masks" in inference_state and label and chunk.node.splitBoxPrompt:
-                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation)
+                        if "masks" in inference_state and label and chunk.node.splitBoxPrompt.value:
+                            ks_bond = chunk.node.bondingKernelSize.value if chunk.node.enableBonding.value else 0
+                            self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation, ks_bond)
 
-                    if "masks" in inference_state and not chunk.node.splitBoxPrompt:
-                        self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation)
+                    if "masks" in inference_state and not chunk.node.splitBoxPrompt.value:
+                        ks_bond = chunk.node.bondingKernelSize.value if chunk.node.enableBonding.value else 0
+                        self.updateMaskImageAndDetectedBboxes(inference_state, mask_image, detectedShapeBboxes, key, w_ori, h_ori, PAR, orientation, ks_bond)
 
                     if chunk.node.maskInvert.value:
                         mask = (mask_image[:,:,0:1] == 0).astype('float32')
