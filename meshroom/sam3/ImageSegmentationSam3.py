@@ -1,4 +1,4 @@
-__version__ = "1.0"
+__version__ = "2.0"
 
 import os
 from pathlib import Path
@@ -8,27 +8,25 @@ from meshroom.core.utils import VERBOSE_LEVEL
 from pyalicevision import parallelization as avpar
 
 class ImageSegmentationSam3(desc.Node):
+    """
+Based on the Segment Anything model 3, the node generates a binary mask from a text prompt and a set of bounding boxes.
+The bounding boxes can be provided through a json file and loaded by clicking on a push button or manualy defined on the 2D viewer.
+When loaded from a json file containing rectangle shapes, the lowered shape name must contains the substring "pos" for the positive bounding boxes and "neg" for the negative ones.
+"""
     size = avpar.DynamicViewsSize("input")
     gpu = desc.Level.INTENSIVE
     parallelization = desc.Parallelization(blockSize=50)
 
     category = "Segmentation"
-    documentation = """
-Based on the Segment Anything model 3, the node generates a binary mask from a text prompt and a set of bounding boxes.
-The bounding boxes can be provided through a json file and loaded by clicking on a push button or manualy defined on the 2D viewer.
-When loaded from a json file containing rectangle shapes, the lowered shape name must contains the substring "pos" for the positive bounding boxes and "neg" for the negative ones.
-"""
 
     inputs = [
         desc.File(
             name="input",
-            label="Input",
             description="SfMData file.",
             value="",
         ),
         desc.StringParam(
             name="prompt",
-            label="Prompt",
             description="Text prompt, 1 concept per line.",
             value="person\nchild\npeople",
             semantic="multiline",
@@ -59,7 +57,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
         ),
         desc.IntParam(
             name="bondingKernelSize",
-            label="Bonding Kernel Size",
             description="Kernel size for morphological processing applied for masks bonding.",
             value=11,
             range=(1, 255, 2),
@@ -80,7 +77,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -95,13 +91,11 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
         ),
         desc.BoolParam(
             name="splitBoxPrompt",
-            label="Split Box Prompt",
             description="Reset detector before feeding with a new positive box and merge results. Negative boxes will be ignored.",
             value=False,
         ),
         desc.ChoiceParam(
             name="verboseLevel",
-            label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
             values=VERBOSE_LEVEL,
@@ -142,7 +136,6 @@ When loaded from a json file containing rectangle shapes, the lowered shape name
         ),
         desc.File(
             name="masks",
-            label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,

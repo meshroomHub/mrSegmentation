@@ -1,4 +1,4 @@
-__version__ = "4.0"
+__version__ = "5.0"
 
 import os
 from pathlib import Path
@@ -11,12 +11,7 @@ import logging
 logger = logging.getLogger("VideoSegmentationSam3Boxes")
 
 class VideoSegmentationSam3Boxes(desc.Node):
-    size = avpar.DynamicViewsSize("input")
-    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
-    # _cuda_tag = "cuda24G"
-
-    category = "Segmentation"
-    documentation = """
+    """
 ## Video Segmentation with SAM3 Bounding Boxes
 
 Generates binary segmentation masks for video sequences using **SAM3** (Segment Anything Model 3),
@@ -96,6 +91,11 @@ In debug mode with tile drawing enabled, masks are written as 3-channels with re
 Filenames use the original input name or the view ID depending on **Keep Filename**.
 Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace.
 """
+    size = avpar.DynamicViewsSize("input")
+    gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
+    # _cuda_tag = "cuda24G"
+
+    category = "Segmentation"
 
     inputs = [
         desc.File(

@@ -1,4 +1,4 @@
-__version__ = "1.0"
+__version__ = "2.0"
 
 import os
 from pathlib import Path
@@ -12,27 +12,25 @@ import logging
 logger = logging.getLogger("VideoSegmentationSam3")
 
 class VideoSegmentationSam3(desc.Node):
-    size = avpar.DynamicViewsSize("input")
-    gpu = desc.Level.EXTREME
-
-    category = "Segmentation"
-    documentation = """
+    """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
 from a text prompt, a single bounding box or a set of positive and negative clicks (Clicks In/Out).
 Text prompt and Clicks can be combined to refine results. For refinement, points must be associated to an existing submask.
 In order to associate a point to a given submask, it must be colored with the submask's color.
 """
+    size = avpar.DynamicViewsSize("input")
+    gpu = desc.Level.EXTREME
+
+    category = "Segmentation"
 
     inputs = [
         desc.File(
             name="input",
-            label="Input",
             description="SfMData file.",
             value="",
         ),
         desc.StringParam(
             name="prompt",
-            label="Prompt",
             description="What to segment, separated by point or one item per line.",
             value="person",
             semantic="multiline",
@@ -51,13 +49,11 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.BoolParam(
             name="timeSlicing",
-            label="Time Slicing",
             description="Enable time slicing by adding text prompt every N frames and by propagating forward on N frames.",
             value=False,
         ),
         desc.IntParam(
             name="sliceSize",
-            label="Slice Size",
             description="Number of frames on which the mask is propagated.",
             value=16,
             enabled=lambda node: node.timeSlicing.value,
@@ -70,7 +66,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.IntParam(
             name="bondingKernelSize",
-            label="Bonding Kernel Size",
             description="Kernel size for morphological processing applied for masks bonding.",
             value=11,
             range=(1, 255, 2),
@@ -84,7 +79,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.BoolParam(
             name="outputCryptomatte",
-            label="Output Cryptomatte",
             description="Generate exr images containing cryptomatte to encode the segmentation results.",
             value=False,
         ),
@@ -97,7 +91,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -136,14 +129,12 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.Rectangle(
             name="boxPrompt",
-            label="Box Prompt",
             description="Single bounding box used as initial prompt.",
             keyable=True,
             keyType="viewId"
         ),
         desc.ChoiceParam(
             name="verboseLevel",
-            label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
             values=VERBOSE_LEVEL,
@@ -160,7 +151,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.File(
             name="masks",
-            label="Masks",
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
@@ -174,7 +164,6 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.File(
             name="cryptomatte",
-            label="Cryptomatte",
             description="Cryptomatte embedded in exr images.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
