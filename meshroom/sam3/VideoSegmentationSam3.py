@@ -132,6 +132,7 @@ In order to associate a point to a given submask, it must be colored with the su
         ),
         desc.Rectangle(
             name="boxPrompt",
+            label="Box Prompt",
             description="Single bounding box used as initial prompt.",
             keyable=True,
             keyType="viewId"
