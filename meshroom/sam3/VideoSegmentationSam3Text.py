@@ -14,8 +14,8 @@ logger = logging.getLogger("VideoSegmentationSam3Text")
 
 class VideoSegmentationSam3Text(desc.Node):
     """
-Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr cryptomatte
-from a text prompt.
+Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr
+cryptomatte from a text prompt.
 """
     size = avpar.DynamicViewsSize("input")
     gpu = lambda node: desc.Level.EXTREME if node.useOnlyHighPowerGpu.value else desc.Level.INTENSIVE
@@ -52,8 +52,8 @@ from a text prompt.
         desc.BoolParam(
             name="timeSlicing",
             description="Enable time slicing by adding text prompt every N frames and Propagating the masks over N frames.\n"
-                        "Propagation is forward only by default, or both forward and backward when 'Combine Forward and Backward Segmentation'\n"
-                        "is enabled.",
+                        "Propagation is forward only by default, or both forward and backward when 'Combine Forward \n"
+                        "and Backward Segmentation' is enabled.",
             value=False,
         ),
         desc.IntParam(
@@ -79,7 +79,8 @@ from a text prompt.
         desc.BoolParam(
             name="maskInvert",
             label="Invert Masks",
-            description="Invert mask values. If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
+            description="Invert mask values.\n"
+                        "If selected, the pixels corresponding to the mask will be set to 0 instead of 255.",
             value=False,
         ),
         desc.BoolParam(
@@ -138,7 +139,8 @@ from a text prompt.
         desc.File(
             name="colorMasksFwd",
             label="Colored Masks Forward",
-            description="Colored segmentation masks resulting from forward propagation. Colors correspond to instance indexes.",
+            description="Colored segmentation masks resulting from forward propagation.\n"
+                        "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value,
@@ -146,7 +148,8 @@ from a text prompt.
         desc.File(
             name="colorMasksBwd",
             label="Colored Masks Backward",
-            description="Colored segmentation masks resulting from backward propagation. Colors correspond to instance indexes.",
+            description="Colored segmentation masks resulting from backward propagation.\n"
+                        "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
@@ -154,7 +157,8 @@ from a text prompt.
         desc.File(
             name="colorMasksMerged",
             label="Colored Masks Merged",
-            description="Colored segmentation masks resulting from merging forward and backward propagation. Colors correspond to instance indexes.",
+            description="Colored segmentation masks resulting from merging forward and backward propagation.\n"
+                        "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,

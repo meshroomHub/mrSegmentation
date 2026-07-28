@@ -1,5 +1,6 @@
 __version__ = "5.0"
 
+import logging
 import os
 from pathlib import Path
 
@@ -7,7 +8,6 @@ from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 from pyalicevision import parallelization as avpar
 
-import logging
 logger = logging.getLogger("VideoSegmentationSam3Boxes")
 
 class VideoSegmentationSam3Boxes(desc.Node):
@@ -96,6 +96,8 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
     # _cuda_tag = "cuda24G"
 
     category = "Segmentation"
+
+    image_paths = []
 
     inputs = [
         desc.File(
@@ -377,14 +379,15 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
                         pil_images = []
                         for frameId, box in chunk_tiles[0].boxes.items():
                             if not chunk.node.computeOnFirstFrameOnly.value or frameId == chunk_image_paths[0][2]:
-                                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[frameId - firstFrameId][0]), True)
+                                idx = frameId - firstFrameId
+                                img, h_ori, w_ori, _, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
                                 full_pil_images[frameId] = img
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, sourceInfo["PAR"])
                                 imgBuf = oiio.ImageBuf(img)
                                 imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = imgBuf.get_pixels(format=oiio.FLOAT)
-                                pil_images.append(Image.fromarray((255.0*img_crop).astype("uint8")))
-    
+                                pil_images.append(Image.fromarray((255.0 * img_crop).astype("uint8")))
+
                         if not rough_mask_available:
                             response = video_predictor.handle_request(
                                 request=dict(
@@ -503,12 +506,14 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
 
                                 if chunk.node.enableTiling.value:
                                     if frame_idx not in full_rough_mask_images and rough_mask_available:
-                                        if os.path.isfile(str(chunk_image_paths[frame_idx - firstFrameId][8])):
-                                            logger.info(f"read mask for frame {frame_idx} at {chunk_image_paths[frame_idx - firstFrameId][8]}")
-                                            maskImg, h_mask, w_mask, PAR_mask, or_mask = image.loadImage(str(chunk_image_paths[frame_idx - firstFrameId][8]), True)
+                                        idx = frame_idx - firstFrameId
+                                        if os.path.isfile(str(chunk_image_paths[idx][8])):
+                                            logger.info(f"read mask for frame {frame_idx} at {chunk_image_paths[idx][8]}")
+                                            maskImg, _, _, _, _ = image.loadImage(str(chunk_image_paths[idx][8]), True)
                                             imgBuf = oiio.ImageBuf(maskImg)
                                             imgBuf = oiio.ImageBufAlgo.crop(imgBuf, roi=oiio.ROI(x1, x2, y1, y2))
-                                            full_rough_mask_images[frame_idx] = np.zeros((maskImg.shape[0], maskImg.shape[1], 1), np.float32)
+                                            full_rough_mask_images[frame_idx] = np.zeros((maskImg.shape[0], maskImg.shape[1], 1),
+                                                                                         np.float32)
                                             full_rough_mask_images[frame_idx][y1:y2, x1:x2, :] = imgBuf.get_pixels(format=oiio.FLOAT)[:, :, 0:1]
 
                                     if frame_idx in full_rough_mask_images:
@@ -529,7 +534,8 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
 
                                         logger.debug(f"IoU = {IoU}")
                                         if IoU < chunk.node.minIoU.value:
-                                            logger.info(f"frame_idx = {frame_idx}; Tile = {tile_idx}; IoU = {IoU} => Use rough mask for this tile")
+                                            logger.info(f"frame_idx = {frame_idx}; Tile = {tile_idx}; IoU = {IoU}"
+                                                         " => Use rough mask for this tile")
                                             fine_mask = rough_mask_crop
 
                                         if rough_mask_available:
@@ -540,10 +546,10 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
                                 final_mask = np.logical_or(fine_mask[:, :, 0], existing_mask)
                                 full_mask_images[frame_idx][y1:y2, x1:x2, 0:1] = np.dstack([final_mask])
                                 if chunk.node.verboseLevel.value.upper() == "DEBUG" and chunk.node.drawTilesInDebug.value:
-                                    full_mask_images[frame_idx][y1:y2, x1:x1+1, 1:3] = [255, 255]
-                                    full_mask_images[frame_idx][y1:y2, x2:x2+1, 1:3] = [255, 255]
-                                    full_mask_images[frame_idx][y1:y1+1, x1:x2, 1:3] = [255, 255]
-                                    full_mask_images[frame_idx][y2:y2+1, x1:x2, 1:3] = [255, 255]
+                                    full_mask_images[frame_idx][y1:y2, x1:x1 + 1, 1:3] = [255, 255]
+                                    full_mask_images[frame_idx][y1:y2, x2:x2 + 1, 1:3] = [255, 255]
+                                    full_mask_images[frame_idx][y1:y1 + 1, x1:x2, 1:3] = [255, 255]
+                                    full_mask_images[frame_idx][y2:y2 + 1, x1:x2, 1:3] = [255, 255]
 
                         video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
 
@@ -570,14 +576,16 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
                     mask = np.zeros_like(full_mask_images[image_path[2]])
                     mask[m[:, :, 0]] = [1.0, 1.0, 1.0] if maskNbChannel == 3 else [1.0]
                 if chunk.node.verboseLevel.value.upper() == "DEBUG" and chunk.node.drawTilesInDebug.value:
-                    g = full_mask_images[image_path[2]][:,:,1:2] > 0
+                    g = full_mask_images[image_path[2]][:, :, 1:2] > 0
                     mask[g[:, :, 0]] = [1.0, 0, 0]
                 logger.info(f"frameId: {frameId} - {image_path[0]}")
 
                 if chunk.node.keepFilename.value:
-                    outputFileMask = os.path.join(chunk.node.output.value, Path(image_path[0]).stem + "." + chunk.node.extensionOut.value)
+                    outputFileMask = os.path.join(chunk.node.output.value, Path(image_path[0]).stem + "." +
+                                                  chunk.node.extensionOut.value)
                 else:
-                    outputFileMask = os.path.join(chunk.node.output.value, str(image_path[1]) + "." + chunk.node.extensionOut.value)
+                    outputFileMask = os.path.join(chunk.node.output.value, str(image_path[1]) + "." +
+                                                  chunk.node.extensionOut.value)
 
                 optWrite = avimg.ImageWriteOptions()
                 optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
@@ -588,7 +596,7 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
                 frame_metadata_deep_model = dict(metadata_deep_model)
                 for prompt, bboxes in metadata_boxes[firstFrameId + frameId].items():
                     for k, box in metadata_boxes[firstFrameId + frameId][prompt].items():
-                            frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
+                        frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
 
                 image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"], sourceInfo["orientation"],
                                  sourceInfo["PAR"], frame_metadata_deep_model, optWrite)
@@ -600,7 +608,6 @@ Bounding box metadata is embedded under the `Meshroom:mrSegmentation:` namespace
 def get_image_paths_list(input_path, path_folder_x2 = "", path_folder_x4 = "", mask_folder = ""):
     from pyalicevision import sfmData, camera
     from pyalicevision import sfmDataIO
-    from pathlib import Path
 
     image_paths = []
 
@@ -610,7 +617,7 @@ def get_image_paths_list(input_path, path_folder_x2 = "", path_folder_x4 = "", m
             if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):
                 views = dataAV.getViews()
                 commonParams = None
-                for id, v in views.items():
+                for vId, v in views.items():
                     image_x1_path = Path(v.getImage().getImagePath())
                     image_x1_name = image_x1_path.name
                     image_x2_path = None
@@ -627,12 +634,13 @@ def get_image_paths_list(input_path, path_folder_x2 = "", path_folder_x4 = "", m
                     par = 1.0
                     if pinhole is not None:
                         par = pinhole.getPixelAspectRatio()
-                    params = [v.getImage().getWidth(), v.getImage().getHeight(), par, image_x2_path is None, image_x4_path is None]
+                    params = [v.getImage().getWidth(), v.getImage().getHeight(), par,
+                              image_x2_path is None, image_x4_path is None]
                     if commonParams is None:
                         commonParams = params
                     if commonParams != params:
                         raise ValueError(f"All images do not have same dimensions or one image is missing its upscaled version: {params} vs {commonParams}")
-                    image_paths.append((image_x1_path, str(id), v.getFrameId(), v.getImage().getWidth(),
+                    image_paths.append((image_x1_path, str(vId), v.getFrameId(), v.getImage().getWidth(),
                                         v.getImage().getHeight(), par, image_x2_path, image_x4_path, mask_path))
 
             image_paths.sort(key=lambda x: x[0])
