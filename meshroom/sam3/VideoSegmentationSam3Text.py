@@ -317,13 +317,16 @@ cryptomatte from a text prompt.
             frame_detections = direction_results.get(frame_id, {})
 
             masks = []
+            colors = []
             for key, mask_box_prob in frame_detections.items():
                 mask = mask_box_prob["mask"]
                 masks.append(mask.squeeze())
 
                 # Draw visual color mask
                 color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
-                color_mask_image[mask] = [x / 255.0 for x in color]
+                color_normalized = [x / 255.0 for x in color]
+                colors.append(color_normalized)
+                color_mask_image[mask] = color_normalized
 
                 # Generate IDs and hash structures for cryptomatte EXRs
                 if output_crypto:
@@ -345,12 +348,21 @@ cryptomatte from a text prompt.
             if masks:
                 masks_stack = np.stack(masks, axis=0)
                 mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1)
+
                 if len(masks) > 1 and node.enableBonding.value:
                     ks = node.bondingKernelSize.value
-                    mask_global = np.expand_dims(sam3Utils.bond_masks(masks, ks, ks, ks), axis=-1)
+                    bonded_bin, bonded_color = sam3Utils.bond_masks(
+                        masks=masks,
+                        colors=colors,
+                        dilate_kernel_size=ks,
+                        conflict_kernel_size=ks,
+                        close_kernel_size=ks
+                    )
+                    mask_global = np.expand_dims(bonded_bin, axis=-1)
+                    color_mask_image = bonded_color
+
                 if is_definitive:
                     mask_images[frame_id] = np.maximum(mask_images[frame_id], mask_global)
-
 
             # Save color mask image
             if node.outputColorMasks.value:

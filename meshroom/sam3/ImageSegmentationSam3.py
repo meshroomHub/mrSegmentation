@@ -259,7 +259,8 @@ positive bounding boxes and "neg" for the negative ones.
             masks_stack = np.stack(masks, axis=0)
             bool_mask = np.sum(masks_stack, axis=0) > 0
             if len(masks) > 1 and ks_bond > 0:
-                bool_mask = sam3Utils.bond_masks(masks, ks_bond, ks_bond, ks_bond) > 0
+                bool_mask, _ = sam3Utils.bond_masks(masks, None, ks_bond, ks_bond, ks_bond)
+                bool_mask = bool_mask > 0
             maskImage[bool_mask] = [255, 255, 255]
         for idx, box in enumerate(boxes):
             x1, y1, x2, y2 = box.cpu().tolist()

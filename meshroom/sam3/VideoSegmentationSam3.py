@@ -468,31 +468,66 @@ In order to associate a point to a given submask, it must be colored with the su
                     colorPalette.generate_palette(max(masks.keys()) + 1)
                 cryptoName = "object" if prompt == "" else prompt
 
-                if masks.keys():
-                    masks_stack = np.stack(list(masks.values()), axis=0)
-                    bool_mask = np.sum(masks_stack, axis=0) > 0
-                    if len(masks.values()) > 1 and chunk.node.enableBonding.value:
-                        ks = chunk.node.bondingKernelSize.value
-                        bool_mask = sam3Utils.bond_masks(list(masks.values()), ks, ks, ks) > 0
-                    maskImage[bool_mask] = [255, 255, 255]
+                masks_list = list(masks.values())
+                keys_list = list(masks.keys())
 
-                for key, mask in masks.items():
-                    color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                    colorMaskImage[mask] = [x/255.0 for x in color]
-                    if chunk.node.outputCryptomatte.value:
-                        obj_name = f"{cryptoName}_{int(key)}"
-                        f32_hash, hex_val, _ = self.hash_name(obj_name)
-                        manifest[obj_name] = hex_val
-                        crypto_id[mask] = f32_hash
-                        crypto_cov[mask] = 1.0
+                if masks.keys():
+                    if len(masks_list) > 1 and chunk.node.enableBonding.value:
+                        ks = chunk.node.bondingKernelSize.value
+
+                        # Generate list of colors corresponding to each mask
+                        colors_list = []
+                        for key in keys_list:
+                            color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
+                            colors_list.append(color)
+
+                        # Call the unified helper to get BOTH matched outputs
+                        bonded_bin, bonded_col = sam3Utils.bond_masks(
+                            masks=masks_list,
+                            colors=colors_list,
+                            dilate_kernel_size=ks,
+                            conflict_kernel_size=ks,
+                            close_kernel_size=ks
+                        )
+                        maskImage[bonded_bin > 0] = [255, 255, 255]
+                        colorMaskImage = bonded_col / 255.0  # Normalize to [0.0, 1.0]
+                    else:
+                        # Fallback behavior when bonding is disabled or 1 mask exists
+                        masks_stack = np.stack(masks_list, axis=0)
+                        bool_mask = np.sum(masks_stack, axis=0) > 0
+                        maskImage[bool_mask] = [255, 255, 255]
+
+                        for key, mask in masks.items():
+                            color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
+                            colorMaskImage[mask] = [x / 255.0 for x in color]
+
+                    # Generate Cryptomatte metadata (always map to original masks)
+                    for key, mask in masks.items():
+                        if chunk.node.outputCryptomatte.value:
+                            obj_name = f"{cryptoName}_{int(key)}"
+                            f32_hash, hex_val, _ = self.hash_name(obj_name)
+                            manifest[obj_name] = hex_val
+                            crypto_id[mask] = f32_hash
+                            crypto_cov[mask] = 1.0
 
                 if frameId in outputs_per_frame_bwd.keys():
-                    if outputs_per_frame_bwd[frameId].keys():
-                        masks_stack = np.stack(list(outputs_per_frame_bwd[frameId].values()), axis=0)
-                        bool_mask = np.sum(masks_stack, axis=0) > 0
-                        if len(outputs_per_frame_bwd[frameId].values()) > 1 and chunk.node.enableBonding.value:
+                    bwd_masks = outputs_per_frame_bwd[frameId]
+                    if bwd_masks.keys():
+                        bwd_masks_list = list(bwd_masks.values())
+                        if len(bwd_masks_list) > 1 and chunk.node.enableBonding.value:
                             ks = chunk.node.bondingKernelSize.value
-                            bool_mask = sam3Utils.bond_masks(list(outputs_per_frame_bwd[frameId].values()), ks, ks, ks) > 0
+                            # Execute binary-only bonding
+                            bonded_bin_bwd, _ = sam3Utils.bond_masks(
+                                masks=bwd_masks_list,
+                                colors=None,
+                                dilate_kernel_size=ks,
+                                conflict_kernel_size=ks,
+                                close_kernel_size=ks
+                            )
+                            bool_mask = bonded_bin_bwd > 0
+                        else:
+                            bwd_masks_stack = np.stack(bwd_masks_list, axis=0)
+                            bool_mask = np.sum(bwd_masks_stack, axis=0) > 0
                         maskImage[bool_mask] = [255, 255, 255]
 
                 if chunk.node.outputCryptomatte.value:
