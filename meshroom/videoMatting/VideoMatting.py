@@ -1,4 +1,4 @@
-__version__ = "1.0"
+__version__ = "1.1"
 
 import logging
 import os
@@ -63,6 +63,12 @@ Matting node for video sequences.
             label="Bounding Box Extension Factor",
             description="Extension factor of bounding boxes containing binary masks.",
             value=1.1,
+        ),
+        desc.BoolParam(
+            name="combineOverlappingBBoxes",
+            label="Combine Overlapping Bounding Boxes",
+            description="Detect and merge overlapping bounding boxes to process them together.",
+            value=False,
         ),
         desc.BoolParam(
             name="useGpu",
@@ -294,7 +300,114 @@ Matting node for video sequences.
             for frame_id in range(len(chunk_image_paths)):
                 metadata_boxes[first_frame_id + frame_id] = {}
 
-            logger.debug(f"bboxes.keys() = {bboxes.keys()}")
+            # Helper for Intersection Checking
+            def boxes_intersect(boxA, boxB):
+                xA1, yA1, xA2, yA2 = boxA
+                xB1, yB1, xB2, yB2 = boxB
+                return not (xA2 <= xB1 or xB2 <= xA1 or yA2 <= yB1 or yB2 <= yA1)
+
+            # Flatten dictionary tracks into flat "tracklets"
+            tracklets = []
+            for key, chunks in bboxes.items():
+                if "_" in key:
+                    text_prompt, obj_id = key.rsplit('_', 1)
+                else:
+                    text_prompt, obj_id = key, ""
+                for chunk_idx, frame_chunk in enumerate(chunks):
+                    tracklets.append({
+                        "key": key,
+                        "text_prompt": text_prompt,
+                        "obj_id": obj_id,
+                        "chunk_idx": chunk_idx,
+                        "frame_chunk": frame_chunk,
+                        "start_frame": frame_chunk.start_frame,
+                        "end_frame": frame_chunk.end_frame,
+                        "boxes": frame_chunk.boxes
+                    })
+
+            n_tracklets = len(tracklets)
+            components = []
+
+            # Graph Construction conditioned by parameter toggle
+            if chunk.node.combineOverlappingBBoxes.value:
+                # Build adjacency list (Temporal and Spatial intersection check)
+                adj = {i: [] for i in range(n_tracklets)}
+                for i in range(n_tracklets):
+                    for j in range(i + 1, n_tracklets):
+                        t1, t2 = tracklets[i], tracklets[j]
+                        # Check temporal overlap
+                        if max(t1["start_frame"], t2["start_frame"]) <= min(t1["end_frame"], t2["end_frame"]):
+                            # Check spatial intersection on any overlapping active frame
+                            overlap = False
+                            common_frames = set(t1["boxes"].keys()) & set(t2["boxes"].keys())
+                            for f in common_frames:
+                                box1_disp = bboxUtils.box_to_display(t1["boxes"][f], par)
+                                box2_disp = bboxUtils.box_to_display(t2["boxes"][f], par)
+                                if boxes_intersect(box1_disp, box2_disp):
+                                    overlap = True
+                                    break
+                            if overlap:
+                                adj[i].append(j)
+                                adj[j].append(i)
+
+                # Connected components grouping (BFS)
+                visited = [False] * n_tracklets
+                for i in range(n_tracklets):
+                    if not visited[i]:
+                        comp = []
+                        queue = [i]
+                        visited[i] = True
+                        while queue:
+                            curr = queue.pop(0)
+                            comp.append(curr)
+                            for neighbor in adj[curr]:
+                                if not visited[neighbor]:
+                                    visited[neighbor] = True
+                                    queue.append(neighbor)
+                        components.append(comp)
+            else:
+                # DEFAULT BEHAVIOR: Do not combine. Each tracklet runs independently
+                components = [[i] for i in range(n_tracklets)]
+
+            # Construct merged tracklet groups (Union of boxes)
+            merged_groups = []
+            for comp in components:
+                group_tracklets = [tracklets[idx] for idx in comp]
+                min_start = min(t["start_frame"] for t in group_tracklets)
+                max_end = max(t["end_frame"] for t in group_tracklets)
+
+                display_boxes = {}
+                for f in range(min_start, max_end + 1):
+                    active_boxes = []
+                    for t in group_tracklets:
+                        if f in t["boxes"]:
+                            box_disp = bboxUtils.box_to_display(t["boxes"][f], par)
+                            active_boxes.append(box_disp)
+                    if active_boxes:
+                        # Union bounding box (min of coordinates, max of coordinates)
+                        x1 = min(b[0] for b in active_boxes)
+                        y1 = min(b[1] for b in active_boxes)
+                        x2 = max(b[2] for b in active_boxes)
+                        y2 = max(b[3] for b in active_boxes)
+                        display_boxes[f] = [x1, y1, x2, y2]
+
+                # Compute global union box across all active frames in the group
+                if display_boxes:
+                    g_x1 = min(b[0] for b in display_boxes.values())
+                    g_y1 = min(b[1] for b in display_boxes.values())
+                    g_x2 = max(b[2] for b in display_boxes.values())
+                    g_y2 = max(b[3] for b in display_boxes.values())
+                    global_box = [g_x1, g_y1, g_x2, g_y2]
+                else:
+                    global_box = [0, 0, frame_w, frame_h]
+
+                merged_groups.append({
+                    "start_frame": min_start,
+                    "end_frame": max_end,
+                    "display_boxes": display_boxes,
+                    "global_box": global_box,
+                    "members": group_tracklets
+                })
 
             full_alpha = {}
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
@@ -304,111 +417,141 @@ Matting node for video sequences.
 
             batch_size = chunk.node.batchSize.value
             overlap = chunk.node.overlap.value
-
             color_palette = image.paletteGenerator()
 
-            for key, frame_chunks in bboxes.items():
-                if "_" in key:
-                    text_prompt, obj_id = key.rsplit('_', 1)
-                else:
-                    text_prompt, obj_id = key, ""
-                logger.info(f"key = {key} ; text prompt = {text_prompt} ; obj_id = {obj_id}")
+            # Run inference on each Group
+            for group_idx, group in enumerate(merged_groups):
+                logger.info(f"Processing group #{group_idx}/{len(merged_groups)-1} containing keys: {[t['key'] for t in group['members']]}")
 
-                for frame_chunk in frame_chunks:
-                    logger.info(f"frame_chunk:\n{frame_chunk}")
-                    logger.debug(f"{frame_chunk.boxes}")
+                total_frames = group["end_frame"] - group["start_frame"] + 1
+                time_slices = self._generate_time_slices(total_frames, batch_size, overlap)
+                logger.debug(f"time_slices = {time_slices}")
 
-                    total_frames = frame_chunk.end_frame - frame_chunk.start_frame + 1
-                    time_slices = self._generate_time_slices(total_frames, batch_size, overlap)
-                    logger.debug(f"time_slices = {time_slices}")
-
-                    cond_frames = []
-                    mask_frames = []
-                    for slice_idx, (slice_start, slice_end) in enumerate(time_slices):
-                        start_frame_id = frame_chunk.start_frame + slice_start
-                        stop_frame_id = frame_chunk.start_frame + slice_end
-                        logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{start_frame_id}, {stop_frame_id}[")
-                        if slice_idx > 0:
-                            if overlap > 0:
-                                cond_frames = cond_frames[-overlap:]
-                                mask_frames = mask_frames[-overlap:]
-                                start_frame_id += overlap
-                            else:
-                                cond_frames = []
-                                mask_frames = []
-                        for frame_id, box in frame_chunk.boxes.items():
-                            if start_frame_id <= frame_id < stop_frame_id:
-                                img, h_ori, w_ori, _, orientation = image.loadImage(str(chunk_image_paths[frame_id - first_frame_id][0]), True)
-                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
-                                img_buf = oiio.ImageBuf(img)
-                                img_buf = oiio.ImageBufAlgo.crop(img_buf, roi=oiio.ROI(x1, x2, y1, y2))
-                                img_crop = img_buf.get_pixels(format=oiio.FLOAT)
-                                method, frame = self._resize_image(img_crop, chunk.node.inferenceSize.value)
-                                resized_h, resized_w = frame.shape[:2]
-                                mask_path = str(chunk_image_paths[frame_id - first_frame_id][1])
-                                mask_path = mask_path.replace("%PROMPT%", text_prompt)
-                                color_mask = True
-                                if not os.path.exists(mask_path):
-                                    mask_path = mask_path.replace("_merged_", "_fwd_")
-                                    if not os.path.exists(mask_path):
-                                        mask_path = mask_path.replace(f"colorMask_{text_prompt}_fwd_", "")
-                                        color_mask = False
-                                mask, _, _, _, _ = image.loadImage(mask_path, True, True, False)
-                                img_buf = oiio.ImageBuf(mask)
-                                if color_mask:
-                                    mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
-                                    color_index = 0 if obj_id=="" else int(obj_id)
-                                    color_palette.generate_palette(color_index + 1)
-                                    tgt = color_palette.at(color_index)
-                                    mask_id = np.zeros_like(img, dtype=np.float32)
-                                    mask_id[(mask_uint8 == tgt).all(axis = -1)] = [1.0, 1.0, 1.0]
-                                    img_buf = oiio.ImageBuf(mask_id)
-
-                                img_buf = oiio.ImageBufAlgo.crop(img_buf, roi=oiio.ROI(x1, x2, y1, y2))
-                                img_crop = img_buf.get_pixels(format=oiio.FLOAT)
-                                if method == "resize":
-                                    mask = cv2.resize(img_crop, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST)
-                                else:
-                                    mask = self._padx8_image(img_crop)
-                                cond_frames.append(frame)
-                                mask_frames.append(mask)
-                        nb_frames, shape = self._check_lists_compatibility(cond_frames, mask_frames)
-                        logger.info(f"slice_idx = {slice_idx} ; {nb_frames} frames ; shape = {shape} ; method = {method}")
-
-                        try:
-                            with torch.amp.autocast('cuda', enabled=False):
-                                output_frames = pipeline.run(cond_frames=cond_frames, mask_frames=mask_frames, seed=42)
-                        except Exception as ex:
-                            logger.error(f"Error in VideoMatting inference at slice {slice_idx}: {ex}")
-                            raise
-
-                        if slice_idx == 0:
-                            mix_frames = output_frames[0:overlap]
+                cond_frames = []
+                mask_frames = []
+                for slice_idx, (slice_start, slice_end) in enumerate(time_slices):
+                    start_frame_id = group["start_frame"] + slice_start
+                    stop_frame_id = group["start_frame"] + slice_end
+                    logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{start_frame_id}, {stop_frame_id}[")
+                    if slice_idx > 0:
+                        if overlap > 0:
+                            cond_frames = cond_frames[-overlap:]
+                            mask_frames = mask_frames[-overlap:]
+                            start_frame_id += overlap
                         else:
-                            mix_frames = []
-                            for i in range(overlap):
-                                new_weight = (i + 1) / (overlap + 1)
-                                blended_frame = (1.0 - new_weight) * previous_frames[i] + new_weight * output_frames[i].copy()
-                                mix_frames.append(blended_frame)
+                            cond_frames = []
+                            mask_frames = []
 
-                        if len(output_frames) >= overlap:
-                            previous_frames = copy.deepcopy(output_frames[-overlap:])
+                    for frame_id in sorted(group["display_boxes"].keys()):
+                        if start_frame_id <= frame_id < stop_frame_id:
+                            # CRITICAL FIX: If grouping is enabled, crop with the unified static global box
+                            # to ensure all frames in the batch have identical tensor spatial dimensions.
+                            if chunk.node.combineOverlappingBBoxes.value:
+                                x1, y1, x2, y2 = group["global_box"]
+                            else:
+                                x1, y1, x2, y2 = group["display_boxes"][frame_id]
 
-                        if slice_idx > 0:
-                            start_frame_id -= overlap
-                        if slice_idx < len(time_slices) - 1:
-                            stop_frame_id -= overlap
+                            # Crop the primary sequence frame
+                            img, h_ori, w_ori, _, orientation = image.loadImage(str(chunk_image_paths[frame_id - first_frame_id][0]), True)
+                            img_buf = oiio.ImageBuf(img)
+                            img_buf = oiio.ImageBufAlgo.crop(img_buf, roi=oiio.ROI(x1, x2, y1, y2))
+                            img_crop = img_buf.get_pixels(format=oiio.FLOAT)
+                            method, frame = self._resize_image(img_crop, chunk.node.inferenceSize.value)
+                            resized_h, resized_w = frame.shape[:2]
 
-                        for frame_id, box in sorted(frame_chunk.boxes.items()):
-                            if frame_id >= start_frame_id and frame_id < stop_frame_id:
-                                frame_idx = frame_id - start_frame_id
-                                if frame_idx < batch_size - overlap or slice_idx == len(time_slices) - 1:
-                                    x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
-                                    box_w = x2 - x1
-                                    box_h = y2 - y1
-                                    output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
-                                    alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
-                                    full_alpha[frame_id][y1:y2, x1:x2, :] = np.maximum(alpha, full_alpha[frame_id][y1:y2, x1:x2, :])
+                            # Accumulate and combine masks for all group members active on this frame
+                            combined_mask_accum = None
+                            for t in group["members"]:
+                                if frame_id in t["boxes"]:
+                                    text_prompt = t["text_prompt"]
+                                    obj_id = t["obj_id"]
+
+                                    mask_path = str(chunk_image_paths[frame_id - first_frame_id][1])
+                                    mask_path = mask_path.replace("%PROMPT%", text_prompt)
+                                    color_mask = True
+                                    if not os.path.exists(mask_path):
+                                        mask_path = mask_path.replace("_merged_", "_fwd_")
+                                        if not os.path.exists(mask_path):
+                                            mask_path = mask_path.replace(f"colorMask_{text_prompt}_fwd_", "")
+                                            color_mask = False
+
+                                    mask, _, _, _, _ = image.loadImage(mask_path, True, True, False)
+                                    img_buf_m = oiio.ImageBuf(mask)
+
+                                    if color_mask:
+                                        mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
+                                        color_index = 0 if obj_id == "" else int(obj_id)
+                                        color_palette.generate_palette(color_index + 1)
+                                        tgt = color_palette.at(color_index)
+                                        mask_id = np.zeros_like(img, dtype=np.float32)
+                                        mask_id[(mask_uint8 == tgt).all(axis=-1)] = [1.0, 1.0, 1.0]
+                                        img_buf_m = oiio.ImageBuf(mask_id)
+
+                                    # Crop individual mask to the unified layout bounding box
+                                    img_buf_m = oiio.ImageBufAlgo.crop(img_buf_m, roi=oiio.ROI(x1, x2, y1, y2))
+                                    mask_crop = img_buf_m.get_pixels(format=oiio.FLOAT)
+
+                                    # Element-wise maximum merges multiple masks together (Pixel logic OR)
+                                    if combined_mask_accum is None:
+                                        combined_mask_accum = mask_crop
+                                    else:
+                                        combined_mask_accum = np.maximum(combined_mask_accum, mask_crop)
+
+                            # Resize merged mask matrix
+                            if method == "resize":
+                                mask_resized = cv2.resize(combined_mask_accum, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST)
+                            else:
+                                mask_resized = self._padx8_image(combined_mask_accum)
+
+                            cond_frames.append(frame)
+                            mask_frames.append(mask_resized)
+
+                    nb_frames, shape = self._check_lists_compatibility(cond_frames, mask_frames)
+                    logger.info(f"slice_idx = {slice_idx} ; {nb_frames} frames ; shape = {shape} ; method = {method}")
+
+                    if nb_frames == 0:
+                        continue
+
+                    try:
+                        with torch.amp.autocast('cuda', enabled=False):
+                            output_frames = pipeline.run(cond_frames=cond_frames, mask_frames=mask_frames, seed=42)
+                    except Exception as ex:
+                        logger.error(f"Error in VideoMatting inference at slice {slice_idx}: {ex}")
+                        raise
+
+                    if slice_idx == 0:
+                        mix_frames = output_frames[0:overlap]
+                    else:
+                        mix_frames = []
+                        for i in range(overlap):
+                            new_weight = (i + 1) / (overlap + 1)
+                            blended_frame = (1.0 - new_weight) * previous_frames[i] + new_weight * output_frames[i].copy()
+                            mix_frames.append(blended_frame)
+
+                    if len(output_frames) >= overlap:
+                        previous_frames = copy.deepcopy(output_frames[-overlap:])
+
+                    start_slice_id = group["start_frame"] + slice_start
+                    if slice_idx > 0:
+                        start_frame_id -= overlap
+                    if slice_idx < len(time_slices) - 1:
+                        stop_frame_id -= overlap
+
+                    for frame_id in sorted(group["display_boxes"].keys()):
+                        if start_frame_id <= frame_id < stop_frame_id:
+                            frame_idx = frame_id - start_slice_id
+                            if frame_idx < batch_size - overlap or slice_idx == len(time_slices) - 1:
+                                if chunk.node.combineOverlappingBBoxes.value:
+                                    x1, y1, x2, y2 = group["global_box"]
+                                else:
+                                    x1, y1, x2, y2 = group["display_boxes"][frame_id]
+
+                                box_w = x2 - x1
+                                box_h = y2 - y1
+                                output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
+                                alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
+                                # Stitch reconstructed matting back to output buffer
+                                full_alpha[frame_id][y1:y2, x1:x2, :] = np.maximum(alpha, full_alpha[frame_id][y1:y2, x1:x2, :])
 
             for key, frame_chunks in bboxes_metadata.items():
                 if "_" in key:
@@ -431,8 +574,8 @@ Matting node for video sequences.
                     opt_write.exrCompressionLevel(300)
 
                 frame_metadata_deep_model = dict(metadata_deep_model_base)
-                for _, bboxes in metadata_boxes[first_frame_id + frame_id].items():
-                    for k, box in bboxes.items():
+                for _, bboxes_meta in metadata_boxes[first_frame_id + frame_id].items():
+                    for k, box in bboxes_meta.items():
                         frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
                 alpha = full_alpha[image_path[2]]
                 image.writeImage(image_path[4], alpha, source_info["h_ori"], source_info["w_ori"], source_info["orientation"],
