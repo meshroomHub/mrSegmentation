@@ -321,10 +321,6 @@ cryptomatte from a text prompt.
                 mask = mask_box_prob["mask"]
                 masks.append(mask.squeeze())
 
-                # Write binary mask corresponding to the definitive pass (forward if no merging, merged otherwise)
-                if is_definitive:
-                    mask_images[frame_id][mask] = [(int(key) + 1) * 255, 255, 255]
-
                 # Draw visual color mask
                 color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
                 color_mask_image[mask] = [x / 255.0 for x in color]
@@ -353,7 +349,7 @@ cryptomatte from a text prompt.
                     ks = node.bondingKernelSize.value
                     mask_global = np.expand_dims(sam3Utils.bond_masks(masks, ks, ks, ks), axis=-1)
                 if is_definitive:
-                    mask_images[frame_id] = mask_global
+                    mask_images[frame_id] = np.maximum(mask_images[frame_id], mask_global)
 
 
             # Save color mask image
