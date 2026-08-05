@@ -394,8 +394,17 @@ def merge_tracks(
     return global_chunk, new_overlap_frame, next_global_id
 
 
-def bond_masks(masks, dilate_kernel_size: int = 11, conflict_kernel_size: int = 11, close_kernel_size: int = 11):
+def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel_size: int = 11,
+              close_kernel_size: int = 11):
+    """
+    Unified bonding function. Resolves overlaps between multiple binary masks using EDT
+    and optionally maps colors to the expanded areas without distortion.
+    """
     import cv2
+    import numpy as np
+    from scipy.ndimage import distance_transform_edt
+
+    bonded_color_mask = None
 
     # Dilate each individual mask
     kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_kernel_size, dilate_kernel_size))
@@ -417,6 +426,25 @@ def bond_masks(masks, dilate_kernel_size: int = 11, conflict_kernel_size: int = 
     global_mask_closed = cv2.morphologyEx(global_mask_raw, cv2.MORPH_CLOSE, kernel_close)
 
     # Apply the closed mask only within detected conflict regions
-    bonded_mask = np.where(action_mask > 0, global_mask_closed, global_mask_raw)
+    bonded_binary_mask = np.where(action_mask > 0, global_mask_closed, global_mask_raw)
 
-    return bonded_mask
+    # Harmonized color bonding steps
+    if colors:
+        height, width = masks[0].shape[:2]
+        color_mask_raw = np.zeros((height, width, 3), dtype=np.float32)
+        for mask, color in zip(masks, colors):
+            color_mask_raw[mask > 0] = color
+
+    # Identify new pixels created strictly by the bonding process
+    # (Where the bonded binary is active, but raw binary wasn't)
+    bonding_gap = (bonded_binary_mask > 0) & (global_mask_raw == 0)
+
+    if colors:
+        bonded_color_mask = color_mask_raw.copy()
+        if np.any(bonding_gap):
+            # Find coordinates of the closest original colored pixels
+            _, indices = distance_transform_edt(global_mask_raw == 0, return_indices=True)
+            # Map nearest colors directly into the gap
+            bonded_color_mask[bonding_gap] = color_mask_raw[indices[0][bonding_gap], indices[1][bonding_gap]]
+
+    return bonded_binary_mask, bonded_color_mask

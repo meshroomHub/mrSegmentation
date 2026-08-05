@@ -5,9 +5,9 @@ import os
 from pathlib import Path
 import struct
 
+from pyalicevision import parallelization as avpar
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
-from pyalicevision import parallelization as avpar
 
 logger = logging.getLogger("VideoSegmentationSam3")
 
@@ -176,7 +176,9 @@ In order to associate a point to a given submask, it must be colored with the su
     ]
 
     def prepare_masks_for_visualization(self, frame_to_output):
-        # frame_to_obj_masks --> {frame_idx: {'output_probs': np.array, `out_obj_ids`: np.array, `out_binary_masks`: np.array}}
+        # frame_to_obj_masks --> {frame_idx: {'output_probs': np.array,
+        #                                     'out_obj_ids': np.array,
+        #                                     'out_binary_masks': np.array}}
         for frame_idx, out in frame_to_output.items():
             _processed_out = {}
             for idx, obj_id in enumerate(out["out_obj_ids"].tolist()):
@@ -185,23 +187,19 @@ In order to associate a point to a given submask, it must be colored with the su
             frame_to_output[frame_idx] = _processed_out
         return frame_to_output
 
-    def propagate_in_video(self, predictor, session_id, start_frame_idx=None, max_frame_num_to_track=None, direction="both"):
+    def propagate_in_video(self, predictor, session_id, start_frame_idx=None,
+                           max_frame_num_to_track=None, direction="both"):
         # we will just propagate from frame 0 to the end of the video
         outputs_per_frame = {}
         for response in predictor.handle_stream_request(
-            request=dict(
-                type="propagate_in_video",
-                session_id=session_id,
-                propagation_direction=direction,
-                start_frame_idx=start_frame_idx,
-                max_frame_num_to_track=max_frame_num_to_track,
-            )
+            request={"type": "propagate_in_video", "session_id": session_id, "propagation_direction": direction,
+                     "start_frame_idx": start_frame_idx, "max_frame_num_to_track": max_frame_num_to_track}
         ):
             outputs_per_frame[response["frame_index"]] = response["outputs"]
         return outputs_per_frame
-        
-    def getClickDictWithViewIdAsKeyFromShape(self, shapeList):
-        clickDictFromShape = {}
+
+    def get_click_dict_with_view_id_as_key_from_shape(self, shapeList):
+        click_dict_from_shape = {}
         shapes = shapeList.getShapesAsDict()
         if shapes:
             for sh in shapes:
@@ -210,22 +208,27 @@ In order to associate a point to a given submask, it must be colored with the su
                     x = sh["observations"][key]["x"]
                     y = sh["observations"][key]["y"]
                     pt = [x, y]
-                    if key in clickDictFromShape:
-                        clickDictFromShape[key].append((pt, color))
+                    if key in click_dict_from_shape:
+                        click_dict_from_shape[key].append((pt, color))
                     else:
-                        clickDictFromShape[key] = [(pt, color)]
-        return clickDictFromShape
+                        click_dict_from_shape[key] = [(pt, color)]
+        return click_dict_from_shape
 
     def normalize_click(self, click_xy, img_w, img_h, PAR, orientation):
         from segmentationRDS import image
         normalized_click = click_xy.copy()
-        normalized_click[0], normalized_click[1] = image.fromRawToUsualOrientation(normalized_click[0], normalized_click[1], img_w, img_h, PAR, orientation)
+        normalized_click[0], normalized_click[1] = image.fromRawToUsualOrientation(normalized_click[0],
+                                                                                   normalized_click[1],
+                                                                                   img_w,
+                                                                                   img_h,
+                                                                                   PAR,
+                                                                                   orientation)
         normalized_click[0] /= img_w
         normalized_click[1] /= img_h
         return normalized_click
 
-    def getBboxDictWithViewIdAsKeyFromShape(self, shape):
-        bboxDictFromShape = {}
+    def get_bbox_dict_with_view_id_as_key_from_shape(self, shape):
+        bbox_dict_from_shape = {}
         sh = shape.getShapeAsDict()
         if sh:
             for key in sh["observations"]:
@@ -234,11 +237,11 @@ In order to associate a point to a given submask, it must be colored with the su
                 w = sh["observations"][key]["size"]["width"]
                 h = sh["observations"][key]["size"]["height"]
                 bb = [xc - w/2, yc - h/2, w, h]
-                if key in bboxDictFromShape:
-                    bboxDictFromShape[key].append(bb)
+                if key in bbox_dict_from_shape:
+                    bbox_dict_from_shape[key].append(bb)
                 else:
-                    bboxDictFromShape[key] = [bb]
-        return bboxDictFromShape
+                    bbox_dict_from_shape[key] = [bb]
+        return bbox_dict_from_shape
 
     def normalize_bbox(self, bbox_xywh, img_w, img_h, PAR, orientation):
         import torch
@@ -249,8 +252,18 @@ In order to associate a point to a given submask, it must be colored with the su
                 len(bbox_xywh) == 4
             ), "bbox_xywh list must have 4 elements. Batching not supported except for torch tensors."
             normalized_bbox = bbox_xywh.copy()
-            normalized_bbox[0], normalized_bbox[1] = image.fromRawToUsualOrientation(normalized_bbox[0], normalized_bbox[1], img_w, img_h, PAR, orientation)
-            normalized_bbox[2], normalized_bbox[3] = image.fromRawToUsualOrientation(normalized_bbox[2], normalized_bbox[3], img_w, img_h, PAR, orientation)
+            normalized_bbox[0], normalized_bbox[1] = image.fromRawToUsualOrientation(normalized_bbox[0],
+                                                                                     normalized_bbox[1],
+                                                                                     img_w,
+                                                                                     img_h,
+                                                                                     PAR,
+                                                                                     orientation)
+            normalized_bbox[2], normalized_bbox[3] = image.fromRawToUsualOrientation(normalized_bbox[2],
+                                                                                     normalized_bbox[3],
+                                                                                     img_w,
+                                                                                     img_h,
+                                                                                     PAR,
+                                                                                     orientation)
             normalized_bbox[0] /= img_w
             normalized_bbox[1] /= img_h
             normalized_bbox[2] /= img_w
@@ -263,8 +276,18 @@ In order to associate a point to a given submask, it must be colored with the su
             assert (
                 normalized_bbox.size(-1) == 4
             ), "bbox_xywh tensor must have last dimension of size 4."
-            normalized_bbox[..., 0], normalized_bbox[..., 1] = image.fromRawToUsualOrientation(normalized_bbox[..., 0], normalized_bbox[..., 1], img_w, img_h, PAR, orientation)
-            normalized_bbox[..., 2], normalized_bbox[..., 3] = image.fromRawToUsualOrientation(normalized_bbox[..., 2], normalized_bbox[..., 3], img_w, img_h, PAR, orientation)
+            normalized_bbox[..., 0], normalized_bbox[..., 1] = image.fromRawToUsualOrientation(normalized_bbox[..., 0],
+                                                                                               normalized_bbox[..., 1],
+                                                                                               img_w,
+                                                                                               img_h,
+                                                                                               PAR,
+                                                                                               orientation)
+            normalized_bbox[..., 2], normalized_bbox[..., 3] = image.fromRawToUsualOrientation(normalized_bbox[..., 2],
+                                                                                               normalized_bbox[..., 3],
+                                                                                               img_w,
+                                                                                               img_h,
+                                                                                               PAR,
+                                                                                               orientation)
             normalized_bbox[..., 0] /= img_w
             normalized_bbox[..., 1] /= img_h
             normalized_bbox[..., 2] /= img_w
@@ -299,7 +322,6 @@ In order to associate a point to a given submask, it must be colored with the su
         import OpenImageIO as oiio
 
         try:
-            self.resolvePaths(chunk.node)
             logger.setLevel(chunk.node.verboseLevel.value.upper())
 
             if not chunk.node.input:
@@ -308,9 +330,8 @@ In order to associate a point to a given submask, it must be colored with the su
             if not chunk.node.output.value:
                 return
 
+            self.resolvePaths(chunk.node)
             logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
-
-            chunk_image_paths = self.image_paths
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
@@ -318,9 +339,9 @@ In order to associate a point to a given submask, it must be colored with the su
             gpus_to_use = [torch.cuda.current_device()]
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue, gpus_to_use=gpus_to_use)
 
-            posClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.positiveClicks)
-            negClickDictFromShape = self.getClickDictWithViewIdAsKeyFromShape(chunk.node.negativeClicks)
-            posBboxDictFromShape = self.getBboxDictWithViewIdAsKeyFromShape(chunk.node.boxPrompt)
+            pos_click_dict_from_shape = self.get_click_dict_with_view_id_as_key_from_shape(chunk.node.positiveClicks)
+            neg_click_dict_from_shape = self.get_click_dict_with_view_id_as_key_from_shape(chunk.node.negativeClicks)
+            pos_bbox_dict_from_shape = self.get_bbox_dict_with_view_id_as_key_from_shape(chunk.node.boxPrompt)
 
             prompt = chunk.node.prompt.value.splitlines()[0]
 
@@ -333,131 +354,127 @@ In order to associate a point to a given submask, it must be colored with the su
             clicks = {}
             bboxes = {}
 
-            colorPalette = image.paletteGenerator()
-            firstFrameId = chunk_image_paths[0][2]
-            frameNumber = len(chunk_image_paths)
-            frameIdxToTextPrompt_fwd = [0]
-            frameIdxToTextPrompt_bwd = [frameNumber - 1]
+            color_palette = image.paletteGenerator()
+            first_frame_id = self.image_paths[0][2]
+            frame_number = len(self.image_paths)
+            frame_idx_to_text_prompt_fwd = [0]
+            frame_idx_to_text_prompt_bwd = [frame_number - 1]
             max_frame_num_to_track_fwd = None
             max_frame_num_to_track_bwd = None
             if chunk.node.timeSlicing.value:
-                if chunk.node.sliceSize.value > 0 and chunk.node.sliceSize.value <= frameNumber:
-                    currFrameToTextPrompt_fwd = 0
-                    currFrameToTextPrompt_bwd = frameNumber - 1
+                if chunk.node.sliceSize.value > 0 and chunk.node.sliceSize.value <= frame_number:
+                    curr_frame_to_text_prompt_fwd = 0
+                    curr_frame_to_text_prompt_bwd = frame_number - 1
                     max_frame_num_to_track_fwd = chunk.node.sliceSize.value - 1
                     max_frame_num_to_track_bwd = chunk.node.sliceSize.value
-                    while currFrameToTextPrompt_fwd + chunk.node.sliceSize.value < frameNumber:
-                        currFrameToTextPrompt_fwd += chunk.node.sliceSize.value
-                        frameIdxToTextPrompt_fwd.append(currFrameToTextPrompt_fwd)
-                    while currFrameToTextPrompt_bwd - chunk.node.sliceSize.value >= 0:
-                        currFrameToTextPrompt_bwd -= chunk.node.sliceSize.value
-                        frameIdxToTextPrompt_bwd.append(currFrameToTextPrompt_bwd)
+                    while curr_frame_to_text_prompt_fwd + chunk.node.sliceSize.value < frame_number:
+                        curr_frame_to_text_prompt_fwd += chunk.node.sliceSize.value
+                        frame_idx_to_text_prompt_fwd.append(curr_frame_to_text_prompt_fwd)
+                    while curr_frame_to_text_prompt_bwd - chunk.node.sliceSize.value >= 0:
+                        curr_frame_to_text_prompt_bwd -= chunk.node.sliceSize.value
+                        frame_idx_to_text_prompt_bwd.append(curr_frame_to_text_prompt_bwd)
 
-            logger.debug(f"frameIdxToTextPromptFwd: {frameIdxToTextPrompt_fwd}")
-            logger.debug(f"frameIdxToTextPromptBwd: {frameIdxToTextPrompt_bwd}")
+            logger.debug(f"frame_idx_to_text_prompt_fwd: {frame_idx_to_text_prompt_fwd}")
+            logger.debug(f"frame_idx_to_text_prompt_bwd: {frame_idx_to_text_prompt_bwd}")
 
-            for idx, _ in enumerate(chunk_image_paths):
-                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(chunk_image_paths[idx][0]), True)
+            for idx, _ in enumerate(self.image_paths):
+                img, h_ori, w_ori, PAR, orientation = image.loadImage(str(self.image_paths[idx][0]), True)
                 pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
-                sourceInfo = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
+                source_info = {"h_ori": h_ori, "w_ori": w_ori, "PAR": PAR, "orientation": orientation}
 
-                viewId = chunk_image_paths[idx][1]
-                if firstFrameId is None or chunk_image_paths[idx][2] is None:
-                    frameId = idx
+                view_id = self.image_paths[idx][1]
+                if first_frame_id is None or self.image_paths[idx][2] is None:
+                    frame_id = idx
                 else:
-                    frameId = chunk_image_paths[idx][2] - firstFrameId
+                    frame_id = self.image_paths[idx][2] - first_frame_id
 
                 objects = {}
-                if viewId is not None and viewId in posClickDictFromShape:
-                    for pt in posClickDictFromShape[viewId]:
+                if view_id is not None and view_id in pos_click_dict_from_shape:
+                    for pt in pos_click_dict_from_shape[view_id]:
                         color = (int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16))
-                        if colorPalette.index(color) is None:
-                            colorPalette.add_color(color)
-                        objId = colorPalette.index(color)
+                        if color_palette.index(color) is None:
+                            color_palette.add_color(color)
+                        obj_id = color_palette.index(color)
 
-                        if objId not in objects:
-                            objects[objId] = [[], []]
+                        if obj_id not in objects:
+                            objects[obj_id] = [[], []]
 
                         p = self.normalize_click(pt[0], img.shape[1], img.shape[0], PAR, orientation)
-                        objects[objId][0].append(p)
-                        objects[objId][1].append(1)
+                        objects[obj_id][0].append(p)
+                        objects[obj_id][1].append(1)
 
-                if viewId is not None and viewId in negClickDictFromShape:
-                    for pt in negClickDictFromShape[viewId]:
+                if view_id is not None and view_id in neg_click_dict_from_shape:
+                    for pt in neg_click_dict_from_shape[view_id]:
                         color = (int(pt[1][1:3], 16), int(pt[1][3:5], 16), int(pt[1][5:], 16))
-                        if colorPalette.index(color) is None:
-                            colorPalette.add_color(color)
-                        objId = colorPalette.index(color)
+                        if color_palette.index(color) is None:
+                            color_palette.add_color(color)
+                        obj_id = color_palette.index(color)
 
-                        if objId not in objects:
-                            objects[objId] = [[], []]
+                        if obj_id not in objects:
+                            objects[obj_id] = [[], []]
 
                         p = self.normalize_click(pt[0], img.shape[1], img.shape[0], PAR, orientation)
-                        objects[objId][0].append(p)
-                        objects[objId][1].append(0)
+                        objects[obj_id][0].append(p)
+                        objects[obj_id][1].append(0)
 
                 if len(objects) > 0:
-                    clicks[frameId] = objects
+                    clicks[frame_id] = objects
 
-                if viewId is not None and str(viewId) in posBboxDictFromShape:
-                    if frameId not in bboxes:
-                        bboxes[frameId] = ([],[])
-                    for bbox in posBboxDictFromShape[viewId]:
+                if view_id is not None and str(view_id) in pos_bbox_dict_from_shape:
+                    if frame_id not in bboxes:
+                        bboxes[frame_id] = ([],[])
+                    for bbox in pos_bbox_dict_from_shape[view_id]:
                         bbox = self.normalize_bbox(bbox, img.shape[1], img.shape[0], PAR, orientation)
-                        bboxes[frameId][0].append(bbox)
-                        bboxes[frameId][1].append(1)
+                        bboxes[frame_id][0].append(bbox)
+                        bboxes[frame_id][1].append(1)
 
             logger.debug(f"clicks = {clicks}")
             logger.debug(f"bboxes = {bboxes}")
 
             response = video_predictor.handle_request(
-                request=dict(
-                    type="start_session",
-                    resource_path=pil_images,
-                    )
+                request={"type": "start_session", "resource_path": pil_images}
             )
             session_id = response["session_id"]
 
             outputs_per_frame_fwd = {}
-            for n, fIdx in enumerate(frameIdxToTextPrompt_fwd):
+            for _, frame_idx in enumerate(frame_idx_to_text_prompt_fwd):
                 video_predictor.handle_request(
-                    request=dict(
-                        type="add_prompt",
-                        session_id=session_id,
-                        frame_index=fIdx,
-                        text=prompt,
-                    )
+                    request={"type": "add_prompt", "session_id": session_id,
+                             "frame_index": frame_idx, "text": prompt}
                 )
-                outputs_per_frame_curr_fwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_fwd, "forward")
+                outputs_per_frame_curr_fwd = self.propagate_in_video(video_predictor,
+                                                                     session_id, frame_idx,
+                                                                     max_frame_num_to_track_fwd,
+                                                                     "forward")
                 outputs_per_frame_fwd.update(outputs_per_frame_curr_fwd)
 
             logger.debug(f"Fwd keys: {outputs_per_frame_fwd.keys()}")
 
-            video_predictor.handle_request(request=dict(type="reset_session", session_id=session_id))
+            video_predictor.handle_request(request={"type": "reset_session", "session_id": session_id})
 
             outputs_per_frame_bwd = {}
             if chunk.node.combineFwdAndBwdSeg.value:
-                for n, fIdx in enumerate(frameIdxToTextPrompt_bwd):
+                for _, frame_idx in enumerate(frame_idx_to_text_prompt_bwd):
                     video_predictor.handle_request(
-                        request=dict(
-                            type="add_prompt",
-                            session_id=session_id,
-                            frame_index=fIdx,
-                            text=prompt,
-                        )
+                        request={"type": "add_prompt", "session_id": session_id,
+                                 "frame_index": frame_idx, "text": prompt}
                     )
-                    outputs_per_frame_curr_bwd = self.propagate_in_video(video_predictor, session_id, fIdx, max_frame_num_to_track_bwd, "backward")
+                    outputs_per_frame_curr_bwd = self.propagate_in_video(video_predictor,
+                                                                         session_id,
+                                                                         frame_idx,
+                                                                         max_frame_num_to_track_bwd,
+                                                                         "backward")
                     outputs_per_frame_bwd.update(outputs_per_frame_curr_bwd)
                 logger.debug(f"Bwd keys: {outputs_per_frame_bwd.keys()}")
 
             outputs_per_frame_fwd = self.prepare_masks_for_visualization(outputs_per_frame_fwd)
             outputs_per_frame_bwd = self.prepare_masks_for_visualization(outputs_per_frame_bwd)
 
-            video_predictor.handle_request(request=dict(type="close_session", session_id=session_id))
+            video_predictor.handle_request(request={"type": "close_session", "session_id": session_id})
 
-            for frameId, masks in outputs_per_frame_fwd.items():
-                maskImage = np.zeros_like(img)
-                colorMaskImage = np.zeros_like(img)
+            for frame_id, masks in outputs_per_frame_fwd.items():
+                mask_image = np.zeros_like(img)
+                color_mask_image = np.zeros_like(img)
                 if chunk.node.outputCryptomatte.value:
                     crypto_id = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
                     crypto_cov = np.zeros((img.shape[0], img.shape[1]), dtype=np.float32)
@@ -465,89 +482,124 @@ In order to associate a point to a given submask, it must be colored with the su
                     manifest = {}
 
                 if len(masks.keys()) > 0:
-                    colorPalette.generate_palette(max(masks.keys()) + 1)
-                cryptoName = "object" if prompt == "" else prompt
+                    color_palette.generate_palette(max(masks.keys()) + 1)
+                crypto_name = "object" if prompt == "" else prompt
+
+                masks_list = list(masks.values())
+                keys_list = list(masks.keys())
 
                 if masks.keys():
-                    masks_stack = np.stack(list(masks.values()), axis=0)
-                    bool_mask = np.sum(masks_stack, axis=0) > 0
-                    if len(masks.values()) > 1 and chunk.node.enableBonding.value:
+                    if len(masks_list) > 1 and chunk.node.enableBonding.value:
                         ks = chunk.node.bondingKernelSize.value
-                        bool_mask = sam3Utils.bond_masks(list(masks.values()), ks, ks, ks) > 0
-                    maskImage[bool_mask] = [255, 255, 255]
 
-                for key, mask in masks.items():
-                    color = colorPalette.at(int(key)) if colorPalette.at(int(key)) is not None else [255, 255, 255]
-                    colorMaskImage[mask] = [x/255.0 for x in color]
-                    if chunk.node.outputCryptomatte.value:
-                        obj_name = f"{cryptoName}_{int(key)}"
-                        f32_hash, hex_val, _ = self.hash_name(obj_name)
-                        manifest[obj_name] = hex_val
-                        crypto_id[mask] = f32_hash
-                        crypto_cov[mask] = 1.0
+                        # Generate list of colors corresponding to each mask
+                        colors_list = []
+                        for key in keys_list:
+                            color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
+                            colors_list.append(color)
 
-                if frameId in outputs_per_frame_bwd.keys():
-                    if outputs_per_frame_bwd[frameId].keys():
-                        masks_stack = np.stack(list(outputs_per_frame_bwd[frameId].values()), axis=0)
+                        # Call the unified helper to get BOTH matched outputs
+                        bonded_bin, bonded_col = sam3Utils.bond_masks(
+                            masks=masks_list,
+                            colors=colors_list,
+                            dilate_kernel_size=ks,
+                            conflict_kernel_size=ks,
+                            close_kernel_size=ks
+                        )
+                        mask_image[bonded_bin > 0] = [255, 255, 255]
+                        color_mask_image = bonded_col / 255.0  # Normalize to [0.0, 1.0]
+                    else:
+                        # Fallback behavior when bonding is disabled or 1 mask exists
+                        masks_stack = np.stack(masks_list, axis=0)
                         bool_mask = np.sum(masks_stack, axis=0) > 0
-                        if len(outputs_per_frame_bwd[frameId].values()) > 1 and chunk.node.enableBonding.value:
+                        mask_image[bool_mask] = [255, 255, 255]
+
+                        for key, mask in masks.items():
+                            color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
+                            color_mask_image[mask] = [x / 255.0 for x in color]
+
+                    # Generate Cryptomatte metadata (always map to original masks)
+                    for key, mask in masks.items():
+                        if chunk.node.outputCryptomatte.value:
+                            obj_name = f"{crypto_name}_{int(key)}"
+                            f32_hash, hex_val, _ = self.hash_name(obj_name)
+                            manifest[obj_name] = hex_val
+                            crypto_id[mask] = f32_hash
+                            crypto_cov[mask] = 1.0
+
+                if frame_id in outputs_per_frame_bwd.keys():
+                    bwd_masks = outputs_per_frame_bwd[frame_id]
+                    if bwd_masks.keys():
+                        bwd_masks_list = list(bwd_masks.values())
+                        if len(bwd_masks_list) > 1 and chunk.node.enableBonding.value:
                             ks = chunk.node.bondingKernelSize.value
-                            bool_mask = sam3Utils.bond_masks(list(outputs_per_frame_bwd[frameId].values()), ks, ks, ks) > 0
-                        maskImage[bool_mask] = [255, 255, 255]
+                            # Execute binary-only bonding
+                            bonded_bin_bwd, _ = sam3Utils.bond_masks(
+                                masks=bwd_masks_list,
+                                colors=None,
+                                dilate_kernel_size=ks,
+                                conflict_kernel_size=ks,
+                                close_kernel_size=ks
+                            )
+                            bool_mask = bonded_bin_bwd > 0
+                        else:
+                            bwd_masks_stack = np.stack(bwd_masks_list, axis=0)
+                            bool_mask = np.sum(bwd_masks_stack, axis=0) > 0
+                        mask_image[bool_mask] = [255, 255, 255]
 
                 if chunk.node.outputCryptomatte.value:
                     spec = oiio.ImageSpec(img.shape[1], img.shape[0], 7, oiio.FLOAT)
-                    spec.channelnames = (cryptoName + ".red", cryptoName + ".green", cryptoName + ".blue",
-                                         cryptoName + "00.red", cryptoName + "00.green", cryptoName + "00.blue",
-                                         cryptoName + "00.alpha")
-                    _, _, h32 = self.hash_name(cryptoName)
+                    spec.channelnames = (crypto_name + ".red", crypto_name + ".green", crypto_name + ".blue",
+                                         crypto_name + "00.red", crypto_name + "00.green", crypto_name + "00.blue",
+                                         crypto_name + "00.alpha")
+                    _, _, h32 = self.hash_name(crypto_name)
                     crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
-                    spec.attribute(f"cryptomatte/{crypto_key}/name", cryptoName)
+                    spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
                     spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest))
                     spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
                     spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
 
                     if chunk.node.keepFilename.value:
-                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" +
-                                                       str(Path(chunk_image_paths[frameId][0]).stem) + ".exr")
+                        cryptomatte_path = os.path.join(chunk.node.output.value, "cryptomatte_" +
+                                                       str(Path(self.image_paths[frame_id][0]).stem) + ".exr")
                     else:
-                        cryptomattePath = os.path.join(chunk.node.output.value, "cryptomatte_" +
-                                                       str(chunk_image_paths[frameId][1]) + ".exr")
+                        cryptomatte_path = os.path.join(chunk.node.output.value, "cryptomatte_" +
+                                                       str(self.image_paths[frame_id][1]) + ".exr")
 
-                    cryptomatteImg = oiio.ImageOutput.create(str(cryptomattePath))
-                    cryptomatteImg.open(cryptomattePath, spec)
+                    cryptomatte_img = oiio.ImageOutput.create(str(cryptomatte_path))
+                    cryptomatte_img.open(cryptomatte_path, spec)
                     cryptomatte_data = np.dstack((crypto_zeros, crypto_zeros, crypto_zeros, crypto_id, crypto_cov,
                                                   crypto_zeros, crypto_zeros))
-                    cryptomatteImg.write_image(cryptomatte_data)
-                    cryptomatteImg.close()
+                    cryptomatte_img.write_image(cryptomatte_data)
+                    cryptomatte_img.close()
 
                 if chunk.node.maskInvert.value:
-                    mask = (maskImage[:, :, 0:1] == 0).astype('float32')
+                    mask = (mask_image[:, :, 0:1] == 0).astype('float32')
                 else:
-                    mask = (maskImage[:, :, 0:1] > 0).astype('float32')
-                logger.info(f"frameId: {frameId} - {chunk_image_paths[frameId][0]}")
+                    mask = (mask_image[:, :, 0:1] > 0).astype('float32')
+                logger.info(f"frame_id: {frame_id} - {self.image_paths[frame_id][0]}")
 
                 if chunk.node.keepFilename.value:
-                    outputFileMask = os.path.join(chunk.node.output.value, Path(chunk_image_paths[frameId][0]).stem +
+                    output_file_mask = os.path.join(chunk.node.output.value, Path(self.image_paths[frame_id][0]).stem +
                                                   "." + chunk.node.extensionOut.value)
-                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" +
-                                                       str(Path(chunk_image_paths[frameId][0]).stem) + ".png")
+                    output_file_color_mask = os.path.join(chunk.node.output.value, "colorMask_" +
+                                                       str(Path(self.image_paths[frame_id][0]).stem) + ".png")
                 else:
-                    outputFileMask = os.path.join(chunk.node.output.value, str(chunk_image_paths[frameId][1]) + "." +
+                    output_file_mask = os.path.join(chunk.node.output.value, str(self.image_paths[frame_id][1]) + "." +
                                                   chunk.node.extensionOut.value)
-                    outputFileColorMask = os.path.join(chunk.node.output.value, "colorMask_" +
-                                                       str(chunk_image_paths[frameId][1]) + ".png")
+                    output_file_color_mask = os.path.join(chunk.node.output.value, "colorMask_" +
+                                                       str(self.image_paths[frame_id][1]) + ".png")
 
-                optWrite = avimg.ImageWriteOptions()
-                optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
-                if Path(outputFileMask).suffix.lower() == ".exr":
-                    optWrite.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
-                    optWrite.exrCompressionLevel(300)
+                opt_write = avimg.ImageWriteOptions()
+                opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
+                if Path(output_file_mask).suffix.lower() == ".exr":
+                    opt_write.exrCompressionMethod(avimg.EImageExrCompression_stringToEnum("DWAA"))
+                    opt_write.exrCompressionLevel(300)
 
-                image.writeImage(outputFileMask, mask, sourceInfo["h_ori"], sourceInfo["w_ori"],
-                                 sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
-                image.writeImage(outputFileColorMask, colorMaskImage, sourceInfo["h_ori"], sourceInfo["w_ori"],
-                                 sourceInfo["orientation"], sourceInfo["PAR"], metadata_deep_model, optWrite)
+                image.writeImage(output_file_mask, mask, source_info["h_ori"], source_info["w_ori"],
+                                 source_info["orientation"], source_info["PAR"], metadata_deep_model, opt_write)
+                image.writeImage(output_file_color_mask, color_mask_image, source_info["h_ori"], source_info["w_ori"],
+                                 source_info["orientation"], source_info["PAR"], metadata_deep_model, opt_write)
 
         finally:
             torch.cuda.empty_cache()
@@ -561,11 +613,11 @@ def get_image_paths_list(input_path):
 
     if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
         if Path(input_path).exists():
-            dataAV = sfmData.SfMData()
-            if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL):
-                views = dataAV.getViews()
-                for vId, v in views.items():
-                    image_paths.append((Path(v.getImage().getImagePath()), str(vId), v.getFrameId()))
+            av_data = sfmData.SfMData()
+            if sfmDataIO.load(av_data, input_path, sfmDataIO.ALL):
+                views = av_data.getViews()
+                for view_id, view in views.items():
+                    image_paths.append((Path(view.getImage().getImagePath()), str(view_id), view.getFrameId()))
 
             image_paths.sort(key=lambda x: x[0])
     else:
