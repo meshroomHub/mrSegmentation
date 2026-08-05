@@ -408,7 +408,7 @@ Matting node for video sequences.
                                     box_h = y2 - y1
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
                                     alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
-                                    full_alpha[frame_id][y1:y2, x1:x2, :] = np.maximum(alpha, full_alpha[frame_id][y1:y2, x1:x2, :])
+                                    full_alpha[frame_id][y1:y2, x1:x2, :] = alpha + full_alpha[frame_id][y1:y2, x1:x2, :]
 
             for key, frame_chunks in bboxes_metadata.items():
                 if "_" in key:
@@ -434,7 +434,7 @@ Matting node for video sequences.
                 for _, bboxes in metadata_boxes[first_frame_id + frame_id].items():
                     for k, box in bboxes.items():
                         frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
-                alpha = full_alpha[image_path[2]]
+                alpha = np.clip(full_alpha[image_path[2]], 0, 1)
                 image.writeImage(image_path[4], alpha, source_info["h_ori"], source_info["w_ori"], source_info["orientation"],
                                 source_info["PAR"], frame_metadata_deep_model, opt_write)
 
