@@ -408,7 +408,7 @@ Matting node for video sequences.
                                     box_h = y2 - y1
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
                                     alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
-                                    full_alpha[frame_id][y1:y2, x1:x2, :] = alpha + full_alpha[frame_id][y1:y2, x1:x2, :]
+                                    full_alpha[frame_id][y1:y2, x1:x2, :] += alpha
 
             for key, frame_chunks in bboxes_metadata.items():
                 if "_" in key:
