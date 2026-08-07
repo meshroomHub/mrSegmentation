@@ -243,28 +243,65 @@ def hash_name(name):
     f32_hex = hex(struct.unpack('<I', struct.pack('<f', f32_val))[0])[2:]
     return f32_val, f32_hex, hash_32
 
-def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_cov):
+def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_cov, preview = None):
     import OpenImageIO as oiio
     import json
     import numpy as np
 
-    spec = oiio.ImageSpec(w, h, 7, oiio.FLOAT)
-    spec.channelnames = (crypto_name+".red", crypto_name+".green", crypto_name+".blue",
-                        crypto_name+"00.red", crypto_name+"00.green", crypto_name+"00.blue", crypto_name+"00.alpha")
+    spec = oiio.ImageSpec(w, h, 8, oiio.FLOAT)
+    spec.channelnames = ("R", "G", "B", "A",
+                        f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue", f"{crypto_name}00.alpha")
     _, _, h32 = hash_name(crypto_name)
     crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
     spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
-    spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest))
+    spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
     spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
     spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
+    spec.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
 
-    crypto_zeros = np.zeros((h, w), dtype=np.float32)
-    cryptomatteImg = oiio.ImageOutput.create(str(filepath))
-    cryptomatteImg.open(filepath, spec)
-    cryptomatte_data = np.dstack((crypto_zeros, crypto_zeros, crypto_zeros, crypto_id, crypto_cov, crypto_zeros, crypto_zeros))
-    cryptomatteImg.write_image(cryptomatte_data)
-    cryptomatteImg.close()
+    zeros = np.zeros((h, w), dtype=np.float32)
 
+    preview = None if preview is None else np.asarray(preview)
+    if preview is not None:
+        if preview.ndim != 3:
+            raise ValueError(f"preview must be HxWxC, got shape {preview.shape}")
+        if preview.shape[0] != h or preview.shape[1] != w:
+            raise ValueError(f"preview size mismatch: expected ({h},{w},C), got {preview.shape}")
+        c = preview.shape[2]
+        if c == 3:
+            preview_rgb = preview.astype(np.float32)
+            alpha = np.ones((h, w, 1), dtype=np.float32)
+            preview_rgba = np.concatenate([preview_rgb, alpha], axis=2)
+        elif c == 4:
+            preview_rgba = preview.astype(np.float32)
+        else:
+            raise ValueError(f"Unsupported channel count in preview: {c} (expected 3 or 4)")
+    else:
+        preview_rgba = np.zeros((h, w, 4), dtype=np.float32)
+
+    crypto = np.dstack((
+        crypto_id.astype(np.float32),   # red   = id0
+        crypto_cov.astype(np.float32),  # green = cov0
+        zeros,                          # blue  = id1 (0)
+        zeros                           # alpha = cov1 (0)
+    ))
+
+    data = np.dstack((preview_rgba, crypto))  # (h,w,8)
+
+    out = oiio.ImageOutput.create(str(filepath))
+    if not out:
+        raise RuntimeError(f"Cannot create ImageOutput for {filepath}")
+    if not out.open(str(filepath), spec):
+        err = out.geterror()
+        out.close()
+        raise RuntimeError(f"Cannot open {filepath}: {err}")
+
+    ok = out.write_image(data)
+    err = out.geterror()
+    out.close()
+    if not ok:
+        raise RuntimeError(f"Write failed: {err}")
+   
 class paletteGenerator:
     def __init__(self, seed=42):
         self.seed = seed
