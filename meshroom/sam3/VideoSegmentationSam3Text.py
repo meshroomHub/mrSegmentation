@@ -515,7 +515,6 @@ cryptomatte from a text prompt.
         node.colorMasksBwd.value = color_mask_prefix + "_bwd_" + src_filename + ".png"
         node.colorMasksMerged.value = color_mask_prefix + "_merged_" + src_filename + ".exr"
         node.cryptomatte.value = cryptomatte_prefix + ("_merged_" if node.combineFwdAndBwdSeg.value else "_fwd_") + src_filename + ".exr"
-        #node.cryptomatteBwd.value = cryptomatte_prefix + "_bwd_" + src_filename + ".exr"
 
     def processChunk(self, chunk):
         from segmentationRDS import image, sam3Utils
