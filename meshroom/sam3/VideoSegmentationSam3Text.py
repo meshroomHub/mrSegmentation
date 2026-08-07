@@ -164,20 +164,12 @@ cryptomatte from a text prompt.
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
         ),
         desc.File(
-            name="cryptomatteFwd",
-            label="Cryptomatte Forward",
-            description="Cryptomatte resulting from forward propagation embedded in EXR images.",
+            name="cryptomatte",
+            label="Cryptomatte",
+            description="Cryptomatte embedded in EXR images resulting from merged result if available, else from forward propagation only.",
             semantic="image",
             value=None,
             enabled=lambda node: node.outputCryptomatte.value,
-        ),
-        desc.File(
-            name="cryptomatteBwd",
-            label="Cryptomatte Backward",
-            description="Cryptomatte resulting from backward propagation embedded in EXR images.",
-            semantic="image",
-            value=None,
-            enabled=lambda node: node.outputCryptomatte.value and node.combineFwdAndBwdSeg.value,
         ),
     ]
 
@@ -298,8 +290,7 @@ cryptomatte from a text prompt.
             (not node.combineFwdAndBwdSeg.value and direction_name == "forward")
         )
 
-        write_cryptomatte = (direction_name in ["forward", "backward"])
-        crypto_name = "object" if text_prompt == "" else text_prompt
+        crypto_name = "cryptoObject" if text_prompt == "" else text_prompt.replace(" ", "_")
 
         for frame_id in frame_range:
             color_mask_image = np.zeros(source_info["shape"], dtype=source_info["dtype"])
@@ -307,7 +298,7 @@ cryptomatte from a text prompt.
             if (first_frame_id + frame_id) not in boxes[text_prompt][direction_name]:
                 boxes[text_prompt][direction_name][first_frame_id + frame_id] = {}
 
-            output_crypto = write_cryptomatte and node.outputCryptomatte.value
+            output_crypto = node.outputCryptomatte.value and is_definitive
             if output_crypto:
                 crypto_id = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
                 crypto_cov = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
@@ -330,7 +321,7 @@ cryptomatte from a text prompt.
 
                 # Generate IDs and hash structures for cryptomatte EXRs
                 if output_crypto:
-                    obj_name = f"{crypto_name}_{dir_prefix}_{int(key)}"
+                    obj_name = f"{crypto_name}_{int(key)}"
                     f32_hash, hex_val, _ = image.hash_name(obj_name)
                     manifest[obj_name] = hex_val
                     crypto_id[mask] = f32_hash
@@ -392,7 +383,8 @@ cryptomatte from a text prompt.
                     source_info["h_ori"],
                     manifest,
                     crypto_id,
-                    crypto_cov
+                    crypto_cov,
+                    color_mask_image
                 )
 
     def _update_tracking_at_step(
@@ -522,8 +514,7 @@ cryptomatte from a text prompt.
         node.colorMasksFwd.value = color_mask_prefix + "_fwd_" + src_filename + ".exr"
         node.colorMasksBwd.value = color_mask_prefix + "_bwd_" + src_filename + ".png"
         node.colorMasksMerged.value = color_mask_prefix + "_merged_" + src_filename + ".exr"
-        node.cryptomatteFwd.value = cryptomatte_prefix + "_fwd_" + src_filename + ".exr"
-        node.cryptomatteBwd.value = cryptomatte_prefix + "_bwd_" + src_filename + ".exr"
+        node.cryptomatte.value = cryptomatte_prefix + ("_merged_" if node.combineFwdAndBwdSeg.value else "_fwd_") + src_filename + ".exr"
 
     def processChunk(self, chunk):
         from segmentationRDS import image, sam3Utils
