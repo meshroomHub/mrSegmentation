@@ -144,12 +144,14 @@ Matting node for video sequences.
                         mask_filename = "colorMask_%PROMPT%_merged_" + str(filename)
                         input_file_mask = os.path.join(mask_path, mask_filename + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, filename + "." + output_ext)
+                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + filename + "." + output_ext)
                 else:
                     if mask_path:
                         input_file_mask = os.path.join(mask_path, str(view_id) + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, str(view_id) + "." + output_ext)
+                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + str(view_id) + "." + output_ext)
                 paths.append((input_file, input_file_mask, frame_id, str(view_id), output_file_matte,
-                              img_width, img_height, par))
+                              output_cryptomatte_path, img_width, img_height, par))
             paths.sort(key=lambda x: x[0])
 
         return paths
@@ -225,6 +227,218 @@ Matting node for video sequences.
                 raise ValueError("List content doesn't match.")
         return len(list1), list1[0].shape
 
+    def _read_exr_first_channel(self, path: str):
+        import OpenImageIO as oiio
+        import numpy as np
+
+        inp = oiio.ImageInput.open(str(path))
+        if not inp:
+            raise RuntimeError(f"Cannot open EXR: {path}")
+        try:
+            arr = inp.read_image(format=oiio.FLOAT)  # float32, shape (h,w,nch) or (h,w)
+            if arr is None:
+                raise RuntimeError(f"Cannot read EXR: {path}")
+        finally:
+            inp.close()
+
+        arr = np.asarray(arr)
+        if arr.ndim == 2:
+            return arr.astype(np.float32, copy=False)
+        return arr[..., 0].astype(np.float32, copy=False)
+
+    def _update_top4_inplace(self, ids4, cov4, roi_id, roi_cov, eps: float = 1e-8):
+        """
+        ids4, cov4: (h,w,4) views into global buffers
+        roi_id: float32 cryptomatte id
+        roi_cov: (h,w) float32 mask values (non-binary ok)
+        Keeps top-4 by coverage per pixel (in descending order).
+        """
+        import numpy as np
+
+        m = roi_cov > eps
+        if not np.any(m):
+            return
+
+        c = roi_cov[m]
+
+        c0 = cov4[..., 0][m]; i0 = ids4[..., 0][m]
+        c1 = cov4[..., 1][m]; i1 = ids4[..., 1][m]
+        c2 = cov4[..., 2][m]; i2 = ids4[..., 2][m]
+        c3 = cov4[..., 3][m]; i3 = ids4[..., 3][m]
+
+        gt0 = c > c0
+        if np.any(gt0):
+            c3[gt0], i3[gt0] = c2[gt0], i2[gt0]
+            c2[gt0], i2[gt0] = c1[gt0], i1[gt0]
+            c1[gt0], i1[gt0] = c0[gt0], i0[gt0]
+            c0[gt0], i0[gt0] = c[gt0],  roi_id
+
+        mid1 = (~gt0) & (c > c1)
+        if np.any(mid1):
+            c3[mid1], i3[mid1] = c2[mid1], i2[mid1]
+            c2[mid1], i2[mid1] = c1[mid1], i1[mid1]
+            c1[mid1], i1[mid1] = c[mid1],  roi_id
+
+        mid2 = (~gt0) & (~mid1) & (c > c2)
+        if np.any(mid2):
+            c3[mid2], i3[mid2] = c2[mid2], i2[mid2]
+            c2[mid2], i2[mid2] = c[mid2],  roi_id
+
+        low = (~gt0) & (~mid1) & (~mid2) & (c > c3)
+        if np.any(low):
+            c3[low], i3[low] = c[low], roi_id
+
+        cov4[..., 0][m] = c0; ids4[..., 0][m] = i0
+        cov4[..., 1][m] = c1; ids4[..., 1][m] = i1
+        cov4[..., 2][m] = c2; ids4[..., 2][m] = i2
+        cov4[..., 3][m] = c3; ids4[..., 3][m] = i3
+
+    def _write_cryptomatte_top4_nuke(self, filepath: str,
+                                     crypto_layer_name: str,
+                                     W: int, H: int,
+                                     manifest: dict,
+                                     ids4,
+                                     cov4,
+                                     preview_rgb = None):
+        """
+        Writes EXR with:
+        - Optional preview RGBA in base channels (R,G,B,A)
+        - 2 cryptomatte layers:
+            cryptoName00 rgba = (id0,cov0,id1,cov1)
+            cryptoName01 rgba = (id2,cov2,id3,cov3)
+        """
+        import OpenImageIO as oiio
+        import numpy as np
+        import json
+        from segmentationRDS import image
+
+        has_preview = preview_rgb is not None
+        nchan = (4 if has_preview else 0) + 8
+
+        spec = oiio.ImageSpec(W, H, nchan, oiio.FLOAT)
+
+        ch = []
+        if has_preview:
+            ch += ["R", "G", "B", "A"]
+        ch += [
+            f"{crypto_layer_name}00.red", f"{crypto_layer_name}00.green", f"{crypto_layer_name}00.blue",  f"{crypto_layer_name}00.alpha",
+            f"{crypto_layer_name}01.red", f"{crypto_layer_name}01.green", f"{crypto_layer_name}01.blue",  f"{crypto_layer_name}01.alpha",
+        ]
+        spec.channelnames = ch
+
+        # Cryptomatte metadata
+        _, _, h32 = image.hash_name(crypto_layer_name)
+        crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
+        spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_layer_name)
+        spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
+        spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
+        spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
+        spec.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
+
+        parts = []
+
+        if has_preview:
+            preview_rgb = np.asarray(preview_rgb, dtype=np.float32)
+            if preview_rgb.shape != (H, W, 3):
+                raise ValueError(f"preview_rgb must be ({H},{W},3), got {preview_rgb.shape}")
+            alpha = np.ones((H, W, 1), dtype=np.float32)
+            parts.append(np.concatenate([preview_rgb, alpha], axis=2))
+
+        # Pack top-4 into 2 RGBA layers (Nuke convention)
+        id0, id1, id2, id3 = (ids4[..., 0], ids4[..., 1], ids4[..., 2], ids4[..., 3])
+        c0,  c1,  c2,  c3  = (cov4[..., 0], cov4[..., 1], cov4[..., 2], cov4[..., 3])
+
+        crypto00 = np.dstack((id0, c0, id1, c1))
+        crypto01 = np.dstack((id2, c2, id3, c3))
+        parts.append(crypto00)
+        parts.append(crypto01)
+
+        data = np.dstack(parts).astype(np.float32, copy=False)
+
+        out = oiio.ImageOutput.create(str(filepath))
+        if not out:
+            raise RuntimeError(f"Cannot create ImageOutput for {filepath}")
+        if not out.open(str(filepath), spec):
+            err = out.geterror()
+            out.close()
+            raise RuntimeError(f"Cannot open {filepath}: {err}")
+        ok = out.write_image(data)
+        err = out.geterror()
+        out.close()
+        if not ok:
+            raise RuntimeError(f"Write failed: {err}")
+        
+    def _build_cryptomatte_for_frame_top4(self, frame: int,
+                                         mask_infos,
+                                         out_path: str,
+                                         crypto_layer_name: str,
+                                         H: int, W: int,
+                                         preview_rgb = None,
+                                         eps: float = 1e-8,
+                                         clamp01: bool = True,
+                                         normalize_if_sum_gt_1: bool = True):
+        """
+        Builds top-4 cryptomatte buffers (H,W,4) by reading ROIs for the given frame.
+        objectName_objectId is unique per frame => one ROI per object.
+        """
+        import numpy as np
+        from segmentationRDS import image
+
+        ids4 = np.zeros((H, W, 4), dtype=np.float32)
+        cov4 = np.zeros((H, W, 4), dtype=np.float32)
+        manifest: dict[str, str] = {}
+
+        for mi in mask_infos:
+            if mi["frame"] != frame:
+                continue
+
+            obj_name = mi["obj_name"]
+            obj_id = mi["obj_id"]
+            x1 = mi["x1"]
+            y1 = mi["y1"]
+            x2 = mi["x2"]
+            y2 = mi["y2"]
+            path = mi["path"]
+
+            key = f"{obj_name}_{obj_id}"
+
+            # bounds check (0-based, inclusive x2/y2)
+            if not (0 <= x1 < x2 <= W and 0 <= y1 < y2 <= H):
+                raise ValueError(f"ROI out of bounds: {path} ROI={(x1,x2,y1,y2)} frame={(W,H)}")
+
+            # id + manifest
+            f32_hash, hex_val, _ = image.hash_name(key)
+            roi_id = np.float32(f32_hash)
+            manifest[key] = hex_val
+
+            roi = self._read_exr_first_channel(str(path))
+            if roi.shape != (y2 - y1, x2 - x1):
+                raise ValueError(f"Mask dims mismatch: {path} expected {(y2 - y1, x2 - x1)} got {roi.shape}")
+
+            roi_cov = roi
+            if clamp01:
+                roi_cov = np.clip(roi_cov, 0.0, 1.0)
+
+            # update only the ROI window
+            ids_roi = ids4[y1:y2, x1:x2, :]
+            cov_roi = cov4[y1:y2, x1:x2, :]
+
+            self._update_top4_inplace(ids_roi, cov_roi, roi_id, roi_cov.astype(np.float32, copy=False), eps=eps)
+
+            os.remove(path)
+
+        if normalize_if_sum_gt_1:
+            s = cov4.sum(axis=2, keepdims=True)
+            den = np.maximum(s, 1.0)  # s<1 => den=1, donc cov4 inchangé
+            cov4 = (cov4 / den).astype(np.float32, copy=False)
+
+        self._write_cryptomatte_top4_nuke(
+            out_path, crypto_layer_name, W, H,
+            manifest=manifest,
+            ids4=ids4, cov4=cov4,
+            preview_rgb=preview_rgb
+        )
+
     def processChunk(self, chunk):
         from segmentationRDS import image, bboxUtils, videoMattingUtils
 
@@ -281,9 +495,9 @@ Matting node for video sequences.
 
             # bboxes.json decoding
             json_path = os.path.join(chunk.node.inputMask.value, "bboxes.json")
-            frame_w = chunk_image_paths[0][5]
-            frame_h = chunk_image_paths[0][6]
-            par = chunk_image_paths[0][7]
+            frame_w = chunk_image_paths[0][6]
+            frame_h = chunk_image_paths[0][7]
+            par = chunk_image_paths[0][8]
             first_frame_id = chunk_image_paths[0][2]
             exp_factor = chunk.node.boxExtensionFactor.value
             bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False,
@@ -299,10 +513,12 @@ Matting node for video sequences.
             metadata_deep_model_base["Meshroom:mrSegmentation:Prompt"] = ";".join(list(dict.fromkeys(prompts)))
 
             full_alpha = {}
+            masks_by_frame = {}
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
             source_info = {"h_ori": h_ori, "w_ori": w_ori, "PAR": p_a_r, "orientation": orientation}
             for frame_id, image_path in enumerate(chunk_image_paths):
                 full_alpha[image_path[2]] = np.zeros_like(img)
+                masks_by_frame[int(image_path[2])] = []
 
             batch_size = chunk.node.batchSize.value
             overlap = chunk.node.overlap.value
@@ -313,7 +529,7 @@ Matting node for video sequences.
                 if "_" in key:
                     text_prompt, obj_id = key.rsplit('_', 1)
                 else:
-                    text_prompt, obj_id = key, ""
+                    text_prompt, obj_id = key, "0"
                 logger.info(f"key = {key} ; text prompt = {text_prompt} ; obj_id = {obj_id}")
 
                 for frame_chunk in frame_chunks:
@@ -411,12 +627,21 @@ Matting node for video sequences.
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
                                     alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
                                     full_alpha[frame_id][y1:y2, x1:x2, :] += alpha
+                                    obj_name = text_prompt.replace(" ", "_")
+                                    roi_path = os.path.join(chunk.node.output.value,
+                                                            f"{str(frame_id)}%{obj_name}%{obj_id}%{str(x1)}%{str(y1)}%{str(x2)}%{str(y2)}.exr")
+                                    image.write_exr_hxwx1_float_lossless(roi_path, alpha[:,:,0])
+                                    masks_by_frame[frame_id].append({"frame": int(frame_id),
+                                                                     "obj_name": obj_name,
+                                                                     "obj_id": obj_id,
+                                                                     "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                                                                     "path": roi_path})
 
             for key, frame_chunks in bboxes_metadata.items():
                 if "_" in key:
                     text_prompt, obj_id = key.rsplit('_', 1)
                 else:
-                    text_prompt, obj_id = key, ""
+                    text_prompt, obj_id = key, "0"
                 for frame_chunk in frame_chunks:
                     for frame_idx, box in sorted(frame_chunk.boxes.items()):
                         if text_prompt not in metadata_boxes[frame_idx]:
@@ -438,7 +663,15 @@ Matting node for video sequences.
                         frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
                 alpha = np.clip(full_alpha[image_path[2]], 0, 1)
                 image.writeImage(image_path[4], alpha, source_info["h_ori"], source_info["w_ori"], source_info["orientation"],
-                                source_info["PAR"], frame_metadata_deep_model, opt_write)
+                                 source_info["PAR"], frame_metadata_deep_model, opt_write)
+                
+                masks_infos = masks_by_frame.get(first_frame_id + frame_id, [])
+                self._build_cryptomatte_for_frame_top4(first_frame_id + frame_id,
+                                                       masks_infos,
+                                                       image_path[5],
+                                                       "cryptoObject",
+                                                       source_info["h_ori"], source_info["w_ori"],
+                                                       alpha)
 
         finally:
             torch.cuda.empty_cache()

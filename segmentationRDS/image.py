@@ -302,6 +302,41 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
     if not ok:
         raise RuntimeError(f"Write failed: {err}")
    
+def write_exr_hxwx1_float_lossless(path, img_hxwx1):
+    """
+    img_hxwx1: numpy array shape (H, W, 1) or (H, W), dtype float32 preferred
+    Writes OpenEXR 1-channel float32 with lossless compression.
+    """
+    a = np.asarray(img_hxwx1)
+
+    if a.ndim == 2:
+        H, W = a.shape
+        a = a.reshape(H, W, 1)
+    elif a.ndim == 3 and a.shape[2] == 1:
+        H, W, _ = a.shape
+    else:
+        raise ValueError("Expected shape (H,W) or (H,W,1)")
+
+    a = np.ascontiguousarray(a, dtype=np.float32)
+
+    spec = oiio.ImageSpec(W, H, 1, oiio.FLOAT)
+    spec.channelnames = ["Y"]
+
+    # EXR lossless compression: "zip", "zips", or "piz"
+    spec.attribute("compression", "zip")
+
+    out = oiio.ImageOutput.create(path)
+    if out is None:
+        raise RuntimeError("Could not create ImageOutput")
+
+    try:
+        if not out.open(path, spec):
+            raise RuntimeError(out.geterror())
+        if not out.write_image(a):
+            raise RuntimeError(out.geterror())
+    finally:
+        out.close()
+
 class paletteGenerator:
     def __init__(self, seed=42):
         self.seed = seed
