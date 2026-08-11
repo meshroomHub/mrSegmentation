@@ -157,12 +157,12 @@ Matting node for video sequences.
                         mask_filename = "colorMask_%PROMPT%_merged_" + str(filename)
                         input_file_mask = os.path.join(mask_path, mask_filename + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, filename + "." + output_ext)
-                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + filename + "." + output_ext)
+                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + filename + ".exr")
                 else:
                     if mask_path:
                         input_file_mask = os.path.join(mask_path, str(view_id) + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, str(view_id) + "." + output_ext)
-                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + str(view_id) + "." + output_ext)
+                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + str(view_id) + ".exr")
                 paths.append((input_file, input_file_mask, frame_id, str(view_id), output_file_matte,
                               output_cryptomatte_path, img_width, img_height, par))
             paths.sort(key=lambda x: x[0])
@@ -306,81 +306,6 @@ Matting node for video sequences.
         cov4[..., 2][m] = c2; ids4[..., 2][m] = i2
         cov4[..., 3][m] = c3; ids4[..., 3][m] = i3
 
-    def _write_cryptomatte_top4_nuke(self, filepath: str,
-                                     crypto_layer_name: str,
-                                     W: int, H: int,
-                                     manifest: dict,
-                                     ids4,
-                                     cov4,
-                                     preview_rgb = None):
-        """
-        Writes EXR with:
-        - Optional preview RGBA in base channels (R,G,B,A)
-        - 2 cryptomatte layers:
-            cryptoName00 rgba = (id0,cov0,id1,cov1)
-            cryptoName01 rgba = (id2,cov2,id3,cov3)
-        """
-        import OpenImageIO as oiio
-        import numpy as np
-        import json
-        from segmentationRDS import image
-
-        has_preview = preview_rgb is not None
-        nchan = (4 if has_preview else 0) + 8
-
-        spec = oiio.ImageSpec(W, H, nchan, oiio.FLOAT)
-
-        ch = []
-        if has_preview:
-            ch += ["R", "G", "B", "A"]
-        ch += [
-            f"{crypto_layer_name}00.red", f"{crypto_layer_name}00.green", f"{crypto_layer_name}00.blue",  f"{crypto_layer_name}00.alpha",
-            f"{crypto_layer_name}01.red", f"{crypto_layer_name}01.green", f"{crypto_layer_name}01.blue",  f"{crypto_layer_name}01.alpha",
-        ]
-        spec.channelnames = ch
-
-        # Cryptomatte metadata
-        _, _, h32 = image.hash_name(crypto_layer_name)
-        crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
-        spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_layer_name)
-        spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
-        spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
-        spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
-        spec.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
-
-        parts = []
-
-        if has_preview:
-            preview_rgb = np.asarray(preview_rgb, dtype=np.float32)
-            if preview_rgb.shape != (H, W, 3):
-                raise ValueError(f"preview_rgb must be ({H},{W},3), got {preview_rgb.shape}")
-            alpha = np.ones((H, W, 1), dtype=np.float32)
-            parts.append(np.concatenate([preview_rgb, alpha], axis=2))
-
-        # Pack top-4 into 2 RGBA layers (Nuke convention)
-        id0, id1, id2, id3 = (ids4[..., 0], ids4[..., 1], ids4[..., 2], ids4[..., 3])
-        c0,  c1,  c2,  c3  = (cov4[..., 0], cov4[..., 1], cov4[..., 2], cov4[..., 3])
-
-        crypto00 = np.dstack((id0, c0, id1, c1))
-        crypto01 = np.dstack((id2, c2, id3, c3))
-        parts.append(crypto00)
-        parts.append(crypto01)
-
-        data = np.dstack(parts).astype(np.float32, copy=False)
-
-        out = oiio.ImageOutput.create(str(filepath))
-        if not out:
-            raise RuntimeError(f"Cannot create ImageOutput for {filepath}")
-        if not out.open(str(filepath), spec):
-            err = out.geterror()
-            out.close()
-            raise RuntimeError(f"Cannot open {filepath}: {err}")
-        ok = out.write_image(data)
-        err = out.geterror()
-        out.close()
-        if not ok:
-            raise RuntimeError(f"Write failed: {err}")
-        
     def _build_cryptomatte_for_frame_top4(self, frame: int,
                                          mask_infos,
                                          out_path: str,
@@ -415,7 +340,7 @@ Matting node for video sequences.
 
             key = f"{obj_name}_{obj_id}"
 
-            # bounds check (0-based, inclusive x2/y2)
+            # bounds check (0-based, exclusive upper bounds)
             if not (0 <= x1 < x2 <= W and 0 <= y1 < y2 <= H):
                 raise ValueError(f"ROI out of bounds: {path} ROI={(x1,x2,y1,y2)} frame={(W,H)}")
 

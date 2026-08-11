@@ -248,6 +248,7 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
     import json
     import numpy as np
 
+    preview = None if preview is None else np.asarray(preview)
     has_preview = preview is not None
     single_layer = crypto_id.ndim == 2 and crypto_cov.ndim == 2
     nchan = (4 if has_preview else 0) + (4 if single_layer else 8) # 4 layers max
@@ -326,6 +327,7 @@ def write_exr_hxwx1_float_lossless(path, img_hxwx1):
     img_hxwx1: numpy array shape (H, W, 1) or (H, W), dtype float32 preferred
     Writes OpenEXR 1-channel float32 with lossless compression.
     """
+    path = str(path)
     a = np.asarray(img_hxwx1)
 
     if a.ndim == 2:
