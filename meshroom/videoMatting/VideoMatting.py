@@ -445,12 +445,7 @@ Matting node for video sequences.
             den = np.maximum(s, 1.0)  # s<1 => den=1, donc cov4 inchangé
             cov4 = (cov4 / den).astype(np.float32, copy=False)
 
-        self._write_cryptomatte_top4_nuke(
-            out_path, crypto_layer_name, W, H,
-            manifest=manifest,
-            ids4=ids4, cov4=cov4,
-            preview_rgb=preview_rgb
-        )
+        image.writeCryptomatte(out_path, crypto_layer_name, W, H, manifest, ids4, cov4, preview_rgb)
 
     def processChunk(self, chunk):
         from segmentationRDS import image, bboxUtils, videoMattingUtils

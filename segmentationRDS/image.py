@@ -248,9 +248,24 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
     import json
     import numpy as np
 
-    spec = oiio.ImageSpec(w, h, 8, oiio.FLOAT)
-    spec.channelnames = ("R", "G", "B", "A",
-                        f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue", f"{crypto_name}00.alpha")
+    has_preview = preview is not None
+    single_layer = crypto_id.ndim == 2 and crypto_cov.ndim == 2
+    nchan = (4 if has_preview else 0) + (4 if single_layer else 8) # 4 layers max
+
+    spec = oiio.ImageSpec(w, h, nchan, oiio.FLOAT)
+
+    ch = []
+    if has_preview:
+        ch += ["R", "G", "B", "A"]
+    ch += [
+        f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue",  f"{crypto_name}00.alpha"
+    ]
+    if not single_layer:
+        ch += [
+            f"{crypto_name}01.red", f"{crypto_name}01.green", f"{crypto_name}01.blue",  f"{crypto_name}01.alpha"
+        ]
+    spec.channelnames = ch
+
     _, _, h32 = hash_name(crypto_name)
     crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
     spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
@@ -261,8 +276,9 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
 
     zeros = np.zeros((h, w), dtype=np.float32)
 
-    preview = None if preview is None else np.asarray(preview)
-    if preview is not None:
+    parts = []
+
+    if has_preview:
         if preview.ndim != 3:
             raise ValueError(f"preview must be HxWxC, got shape {preview.shape}")
         if preview.shape[0] != h or preview.shape[1] != w:
@@ -276,17 +292,20 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
             preview_rgba = preview.astype(np.float32)
         else:
             raise ValueError(f"Unsupported channel count in preview: {c} (expected 3 or 4)")
+        parts.append(preview_rgba)
+
+    if not single_layer:
+        id0, id1, id2, id3 = (crypto_id[..., 0], crypto_id[..., 1], crypto_id[..., 2], crypto_id[..., 3])
+        c0,  c1,  c2,  c3  = (crypto_cov[..., 0], crypto_cov[..., 1], crypto_cov[..., 2], crypto_cov[..., 3])
+        crypto00 = np.dstack((id0, c0, id1, c1))
+        crypto01 = np.dstack((id2, c2, id3, c3))
+        parts.append(crypto00)
+        parts.append(crypto01)
     else:
-        preview_rgba = np.zeros((h, w, 4), dtype=np.float32)
+        crypto00 = np.dstack((crypto_id.astype(np.float32), crypto_cov.astype(np.float32), zeros, zeros))
+        parts.append(crypto00)
 
-    crypto = np.dstack((
-        crypto_id.astype(np.float32),   # red   = id0
-        crypto_cov.astype(np.float32),  # green = cov0
-        zeros,                          # blue  = id1 (0)
-        zeros                           # alpha = cov1 (0)
-    ))
-
-    data = np.dstack((preview_rgba, crypto))  # (h,w,8)
+    data = np.dstack(parts).astype(np.float32, copy=False)
 
     out = oiio.ImageOutput.create(str(filepath))
     if not out:
