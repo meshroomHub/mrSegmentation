@@ -1,4 +1,4 @@
-__version__ = "1.0"
+__version__ = "1.1"
 
 import logging
 import os
@@ -72,6 +72,11 @@ Matting node for video sequences.
             invalidate=False,
         ),
         desc.BoolParam(
+            name="outputCryptomatte",
+            description="Generate exr images containing cryptomatte to encode the matting results.",
+            value=False,
+        ),
+        desc.BoolParam(
             name="keepFilename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
@@ -107,6 +112,14 @@ Matting node for video sequences.
             description="Generated mattes.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
+        ),
+        desc.File(
+            name="cryptomatte",
+            label="Cryptomatte",
+            description="Cryptomatte embedded in EXR images.",
+            semantic="image",
+            value=lambda attr: "{nodeCacheFolder}/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
+            enabled=lambda node: node.outputCryptomatte.value,
         ),
     ]
 
@@ -627,15 +640,16 @@ Matting node for video sequences.
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
                                     alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
                                     full_alpha[frame_id][y1:y2, x1:x2, :] += alpha
-                                    obj_name = text_prompt.replace(" ", "_")
-                                    roi_path = os.path.join(chunk.node.output.value,
-                                                            f"{str(frame_id)}%{obj_name}%{obj_id}%{str(x1)}%{str(y1)}%{str(x2)}%{str(y2)}.exr")
-                                    image.write_exr_hxwx1_float_lossless(roi_path, alpha[:,:,0])
-                                    masks_by_frame[frame_id].append({"frame": int(frame_id),
-                                                                     "obj_name": obj_name,
-                                                                     "obj_id": obj_id,
-                                                                     "x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                                                                     "path": roi_path})
+                                    if chunk.node.outputCryptomatte.value:
+                                        obj_name = text_prompt.replace(" ", "_")
+                                        roi_path = os.path.join(chunk.node.output.value,
+                                                                f"{str(frame_id)}%{obj_name}%{obj_id}%{str(x1)}%{str(y1)}%{str(x2)}%{str(y2)}.exr")
+                                        image.write_exr_hxwx1_float_lossless(roi_path, alpha[:,:,0])
+                                        masks_by_frame[frame_id].append({"frame": int(frame_id),
+                                                                        "obj_name": obj_name,
+                                                                        "obj_id": obj_id,
+                                                                        "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                                                                        "path": roi_path})
 
             for key, frame_chunks in bboxes_metadata.items():
                 if "_" in key:
@@ -665,13 +679,14 @@ Matting node for video sequences.
                 image.writeImage(image_path[4], alpha, source_info["h_ori"], source_info["w_ori"], source_info["orientation"],
                                  source_info["PAR"], frame_metadata_deep_model, opt_write)
                 
-                masks_infos = masks_by_frame.get(first_frame_id + frame_id, [])
-                self._build_cryptomatte_for_frame_top4(first_frame_id + frame_id,
-                                                       masks_infos,
-                                                       image_path[5],
-                                                       "cryptoObject",
-                                                       source_info["h_ori"], source_info["w_ori"],
-                                                       alpha)
+                if chunk.node.outputCryptomatte.value:
+                    masks_infos = masks_by_frame.get(first_frame_id + frame_id, [])
+                    self._build_cryptomatte_for_frame_top4(first_frame_id + frame_id,
+                                                        masks_infos,
+                                                        image_path[5],
+                                                        "cryptoObject",
+                                                        source_info["h_ori"], source_info["w_ori"],
+                                                        alpha)
 
         finally:
             torch.cuda.empty_cache()
