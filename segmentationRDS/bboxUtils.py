@@ -234,11 +234,15 @@ def extract_tracking(
             if merged:
                 all_frames = sorted(set(merged.keys()),key=int)
                 for frame_idx in all_frames:
-                    raw_boxes[int(frame_idx)] = merged.get(frame_idx,  {}).get(obj_id)
+                    box = merged.get(frame_idx,  {}).get(obj_id)
+                    if box:
+                        raw_boxes[int(frame_idx)] = box
             else:
                 all_frames = sorted(set(forward.keys()),key=int)
                 for frame_idx in all_frames:
-                    raw_boxes[int(frame_idx)] = forward.get(frame_idx,  {}).get(obj_id)
+                    box = forward.get(frame_idx,  {}).get(obj_id)
+                    if box:
+                        raw_boxes[int(frame_idx)] = box
 
             # --- compute target size ---
             target_size_w, target_size_h = get_target_size(raw_boxes, par, roundCrop, squareBox, exp_factor)
