@@ -217,38 +217,28 @@ def extract_tracking(
 
     for label, directions in data.items():
         forward  = directions.get("forward",  {})
-        backward = directions.get("backward", {})
+        merged = directions.get("merged", {})
 
         all_object_ids = set()
-        for frame_data in forward.values():
-            all_object_ids.update(frame_data.keys())
-        for frame_data in backward.values():
-            all_object_ids.update(frame_data.keys())
+        if merged:
+            for frame_data in merged.values():
+                all_object_ids.update(frame_data.keys())
+        else:
+            for frame_data in forward.values():
+                all_object_ids.update(frame_data.keys())
 
         for obj_id in sorted(all_object_ids, key=int):
             key = f"{label}_{obj_id}"
             raw_boxes = {}
 
-            all_frames = sorted(
-                set(forward.keys()) | set(backward.keys()),
-                key=int
-            )
-
-            # Merge forward/backward (in source space) ---
-            for frame_idx in all_frames:
-                fwd_box = forward.get(frame_idx,  {}).get(obj_id)
-                bwd_box = backward.get(frame_idx, {}).get(obj_id)
-
-                if fwd_box and bwd_box:
-                    box, _ = merge_boxes(fwd_box, bwd_box, iou_threshold)
-                elif fwd_box:
-                    box = fwd_box
-                elif bwd_box:
-                    box = bwd_box
-                else:
-                    continue
-
-                raw_boxes[int(frame_idx)] = box
+            if merged:
+                all_frames = sorted(set(merged.keys()),key=int)
+                for frame_idx in all_frames:
+                    raw_boxes[int(frame_idx)] = merged.get(frame_idx,  {}).get(obj_id)
+            else:
+                all_frames = sorted(set(forward.keys()),key=int)
+                for frame_idx in all_frames:
+                    raw_boxes[int(frame_idx)] = forward.get(frame_idx,  {}).get(obj_id)
 
             # --- compute target size ---
             target_size_w, target_size_h = get_target_size(raw_boxes, par, roundCrop, squareBox, exp_factor)

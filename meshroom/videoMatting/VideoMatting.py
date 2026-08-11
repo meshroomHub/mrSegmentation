@@ -295,6 +295,8 @@ Matting node for video sequences.
                 metadata_boxes[first_frame_id + frame_id] = {}
 
             logger.debug(f"bboxes.keys() = {bboxes.keys()}")
+            prompts = [key.rsplit('_', 1)[0] for key in bboxes.keys()]
+            metadata_deep_model_base["Meshroom:mrSegmentation:Prompt"] = ";".join(list(dict.fromkeys(prompts)))
 
             full_alpha = {}
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
