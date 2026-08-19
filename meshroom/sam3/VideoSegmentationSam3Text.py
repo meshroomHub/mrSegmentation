@@ -338,7 +338,7 @@ cryptomatte from a text prompt.
 
             if masks:
                 masks_stack = np.stack(masks, axis=0)
-                mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1)
+                mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1).astype(np.float32)
 
                 if len(masks) > 1 and node.enableBonding.value:
                     ks = node.bondingKernelSize.value

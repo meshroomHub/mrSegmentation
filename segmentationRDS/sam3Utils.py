@@ -426,7 +426,7 @@ def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel
     global_mask_closed = cv2.morphologyEx(global_mask_raw, cv2.MORPH_CLOSE, kernel_close)
 
     # Apply the closed mask only within detected conflict regions
-    bonded_binary_mask = np.where(action_mask > 0, global_mask_closed, global_mask_raw)
+    bonded_binary_mask = np.where(action_mask > 0, global_mask_closed, global_mask_raw).astype(np.float32)
 
     # Harmonized color bonding steps
     if colors:
@@ -435,11 +435,10 @@ def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel
         for mask, color in zip(masks, colors):
             color_mask_raw[mask > 0] = color
 
-    # Identify new pixels created strictly by the bonding process
-    # (Where the bonded binary is active, but raw binary wasn't)
-    bonding_gap = (bonded_binary_mask > 0) & (global_mask_raw == 0)
+        # Identify new pixels created strictly by the bonding process
+        # (Where the bonded binary is active, but raw binary wasn't)
+        bonding_gap = (bonded_binary_mask > 0) & (global_mask_raw == 0)
 
-    if colors:
         bonded_color_mask = color_mask_raw.copy()
         if np.any(bonding_gap):
             # Find coordinates of the closest original colored pixels
