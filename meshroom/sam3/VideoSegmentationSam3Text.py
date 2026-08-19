@@ -244,7 +244,7 @@ cryptomatte from a text prompt.
                     "shape": img.shape,
                     "dtype": img.dtype
                 }
-            mask_images.append(np.zeros_like(img))
+            mask_images.append(np.zeros((*img.shape[:2], 1), dtype=img.dtype))
 
         return pil_images, mask_images, source_info
 
@@ -353,7 +353,7 @@ cryptomatte from a text prompt.
                     color_mask_image = bonded_color
 
                 if is_definitive:
-                    mask_images[frame_id] = np.maximum(mask_images[frame_id], mask_global)
+                    mask_images[frame_id] = np.maximum(mask_images[frame_id], mask_global, out=mask_images[frame_id])
 
             # Save color mask image
             if node.outputColorMasks.value:
