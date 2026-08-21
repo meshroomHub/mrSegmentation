@@ -105,6 +105,21 @@ Known Limitations:
             range=(10000, 20000, 100),
         ),
         desc.BoolParam(
+            name="limitInferenceSize",
+            label="Limit Inference Size",
+            description="If enabled, input image and trimap will be resized if needed.",
+            value=True,
+        ),
+        desc.ChoiceParam(
+            name="inferenceSize",
+            label="Inference Size Max",
+            description="Maximum size of the largest image dimension for inference. Automatic resize if higher.",
+            value=1024,
+            values=[512, 640, 768, 896, 1024, 2048],
+            exclusive=True,
+            enabled=lambda node: node.limitInferenceSize.value,
+        ),
+        desc.BoolParam(
             name="useGpu",
             label="Use GPU",
             description="Use GPU for computation if available.",
@@ -273,6 +288,8 @@ Known Limitations:
             "Meshroom:mrSegmentation:DeepModelVersion": chunk.node.meMatteModel.value + "-" + str(chunk.node.maxTokenNumber.value)
             }
 
+            limitedSize = chunk.node.limitInferenceSize.value
+
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
 
@@ -299,6 +316,8 @@ Known Limitations:
 
                     matteRGB = np.zeros_like(img)
                     fullTrimap = np.zeros_like(img)
+
+                    sz = int(chunk.node.inferenceSize.value)
 
                     for key, box in boxes.items():
                         x1, y1, x2, y2 = bboxUtils.box_to_display(box, PAR)
@@ -358,13 +377,24 @@ Known Limitations:
                         img_for_inference = img[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :]
                         trimap_for_inference = trimap_box[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference]
 
-                        inference_size = (w_inference, h_inference)
+                        if limitedSize:
+                            if w_inference > h_inference and w_inference > sz:
+                                inference_size = (sz, int(sz * h_inference / w_inference))
+                            elif h_inference > w_inference and h_inference > sz:
+                                inference_size = (int(sz * w_inference / h_inference), sz)
+                            elif w_inference == h_inference and w_inference > sz:
+                                inference_size = (sz, sz)
+                            else:
+                                inference_size = (w_inference, h_inference)
+                            logger.debug(f"inference size : {inference_size} ; ratio = {inference_size[0] / w_inference}")
 
-                        logger.debug(f"inference size : {inference_size} ; ratio = {inference_size[0] / w_inference}")
+                            img_sized = cv2.resize(img_for_inference, inference_size, interpolation=cv2.INTER_LINEAR)
+                            box_trimap = np.expand_dims(cv2.resize(trimap_for_inference, inference_size, interpolation=cv2.INTER_NEAREST), axis=-1)
+                        else:
+                            img_sized = img_for_inference
+                            box_trimap = np.expand_dims(trimap_for_inference, axis=-1)
 
-                        img_sized = img_for_inference
                         sample = {"image": torch.from_numpy(img_sized).permute(2, 0, 1).unsqueeze(0)}
-                        box_trimap = np.expand_dims(trimap_for_inference, axis=-1)
                         sample["trimap"] = torch.from_numpy(box_trimap).permute(2, 0, 1).unsqueeze(0)
 
                         with torch.no_grad():
@@ -372,6 +402,9 @@ Known Limitations:
                             matte = matte['phas'].flatten(0, 2).squeeze(0)
                             matte = matte.detach().cpu().numpy()
                             box_matteRGB = np.dstack([matte, matte, matte])
+                            if limitedSize:
+                                matte = cv2.resize(matte, (w_inference, h_inference))
+                                box_matteRGB = cv2.resize(box_matteRGB, (w_inference, h_inference), interpolation=cv2.INTER_LINEAR)
                             tgt = matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :]
                             matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = np.maximum(tgt, box_matteRGB)
 
