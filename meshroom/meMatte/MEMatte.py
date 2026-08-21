@@ -171,7 +171,7 @@ Known Limitations:
             description="Trimap computed from input mask.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/trimap_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
-            enabled=lambda node: node.inputMask.isLink,
+            enabled=lambda node: node.inputMask.value != "",
         ),
     ]
 
@@ -272,8 +272,12 @@ Known Limitations:
 
             device = "cuda" if torch.cuda.is_available() and chunk.node.useGpu.value else "cpu"
 
-            configPath = os.getenv("MEMATTE_CONFIG_PATH") + "/" + modelConfigNames[chunk.node.meMatteModel.value]
-            checkpointPath = os.getenv("MEMATTE_MODELS_PATH") + "/" + checkpointNames[chunk.node.meMatteModel.value]
+            configRoot = os.getenv("MEMATTE_CONFIG_PATH")
+            checkpointRoot = os.getenv("MEMATTE_MODELS_PATH")
+            if not configRoot or not checkpointRoot:
+                raise ValueError("MEMATTE_CONFIG_PATH and MEMATTE_MODELS_PATH must both be defined.")
+            configPath = configRoot + "/" + modelConfigNames[chunk.node.meMatteModel.value]
+            checkpointPath = checkpointRoot + "/" + checkpointNames[chunk.node.meMatteModel.value]
 
             logger.info(f"configPath = {configPath}")
             logger.info(f"checkpointPath = {checkpointPath}")
@@ -343,7 +347,7 @@ Known Limitations:
                                 trimap_box[mask_dilate == 0.0] = 0.0
                             trimap_box = trimap_box[:, :, 0]
 
-                        coords = np.argwhere(trimap_box == 0.5)
+                        coords = np.argwhere(np.isclose(trimap_box, 0.5, atol=1.0 / 255.0))
                         if len(coords) == 0:
                             logger.warning(f"No trimap in box {(x1, y1, x2, y2)} af frame {frameId}")
                             return
@@ -361,10 +365,12 @@ Known Limitations:
 
                         trimap_ext = 1.1
                         mask_height, mask_width, _ = promptRGB.shape
-                        x_left_inference = max(0, x_center - int(trimap_ext * width / 2.0))
-                        x_right_inference = min(mask_width, x_center + int(trimap_ext * width / 2.0))
-                        y_top_inference = max(0, y_center - int(trimap_ext * height / 2.0))
-                        y_bottom_inference = min(mask_height, y_center + int(trimap_ext * height / 2.0))
+                        x_half_extent = max(1, int(trimap_ext * width / 2.0))
+                        y_half_extent = max(1, int(trimap_ext * height / 2.0))
+                        x_left_inference = max(0, x_center - x_half_extent)
+                        x_right_inference = min(mask_width, x_center + x_half_extent)
+                        y_top_inference = max(0, y_center - y_half_extent)
+                        y_bottom_inference = min(mask_height, y_center + y_half_extent)
                         top_left_xy = (x_left_inference, y_top_inference)
                         bottom_right_xy = (x_right_inference, y_bottom_inference)
 
@@ -400,10 +406,11 @@ Known Limitations:
                             matte, _, _ = model(sample, patch_decoder=True)
                             matte = matte['phas'].flatten(0, 2).squeeze(0)
                             matte = matte.detach().cpu().numpy()
-                            box_matteRGB = np.dstack([matte, matte, matte])
                             if limitedSize:
-                                matte = cv2.resize(matte, (w_inference, h_inference))
-                                box_matteRGB = cv2.resize(box_matteRGB, (w_inference, h_inference), interpolation=cv2.INTER_LINEAR)
+                                matte = cv2.resize(matte, (w_inference, h_inference), interpolation=cv2.INTER_LINEAR)
+                            matte[trimap_for_inference == 0] = 0
+                            matte[trimap_for_inference == 1] = 1
+                            box_matteRGB = np.dstack([matte, matte, matte])
                             tgt = matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :]
                             matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = np.maximum(tgt, box_matteRGB)
 
