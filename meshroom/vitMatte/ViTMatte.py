@@ -399,10 +399,9 @@ Known Limitations:
                             matte = model(sample)
                             matte = matte['phas'].flatten(0, 2).squeeze(0)
                             matte = matte.detach().cpu().numpy()
-                            box_matteRGB = np.dstack([matte, matte, matte])
                             if limitedSize:
-                                matte = cv2.resize(matte, (w_inference, h_inference))
-                                box_matteRGB = cv2.resize(box_matteRGB, (w_inference, h_inference), interpolation=cv2.INTER_LINEAR)
+                                matte = cv2.resize(matte, (w_inference, h_inference), interpolation=cv2.INTER_LINEAR)
+                            box_matteRGB = np.dstack([matte, matte, matte])
                             tgt = matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :]
                             matteRGB[y_top_inference:y_bottom_inference, x_left_inference:x_right_inference, :] = np.maximum(tgt, box_matteRGB)
 
