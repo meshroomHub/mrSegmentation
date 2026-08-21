@@ -289,6 +289,7 @@ Known Limitations:
             }
 
             limitedSize = chunk.node.limitInferenceSize.value
+            sz = int(chunk.node.inferenceSize.value)
 
             for k, (iFile, oFile) in enumerate(outFiles.items()):
                 if k >= chunk.range.start and k <= chunk.range.last:
@@ -316,8 +317,6 @@ Known Limitations:
 
                     matteRGB = np.zeros_like(img)
                     fullTrimap = np.zeros_like(img)
-
-                    sz = int(chunk.node.inferenceSize.value)
 
                     for key, box in boxes.items():
                         x1, y1, x2, y2 = bboxUtils.box_to_display(box, PAR)
