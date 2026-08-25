@@ -437,16 +437,6 @@ Matting node for video sequences.
                                                 False, exp_factor, par)
             bboxes_metadata = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False,
                                                          False, exp_factor, par)
-
-            first_frame_only = True
-            for key, frame_chunks in bboxes.items():
-                key_ok = len(frame_chunks) == 1 and frame_chunks[0].end_frame == frame_chunks[0].start_frame == first_frame_id
-                first_frame_only = first_frame_only and key_ok
-                if not first_frame_only:
-                    break
-            if first_frame_only:
-                chunk_image_paths = [chunk_image_paths[0]]
-
             metadata_boxes = {}
             for frame_id in range(len(chunk_image_paths)):
                 metadata_boxes[first_frame_id + frame_id] = {}
