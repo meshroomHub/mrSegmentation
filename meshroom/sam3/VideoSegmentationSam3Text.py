@@ -160,7 +160,7 @@ cryptomatte from a text prompt.
                         "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
-            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
+            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value and not node.firstFrameOnly.value,
         ),
         desc.File(
             name="colorMasksMerged",
@@ -169,7 +169,7 @@ cryptomatte from a text prompt.
                         "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
-            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value and not chunk.node.firstFrameOnly.value,
+            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value and not node.firstFrameOnly.value,
         ),
         desc.File(
             name="cryptomatte",
@@ -648,7 +648,7 @@ cryptomatte from a text prompt.
                         metadata_deep_model=metadata_deep_model
                     )
 
-                    if chunk.node.combineFwdAndBwdSeg.value:
+                    if chunk.node.combineFwdAndBwdSeg.value and not chunk.node.firstFrameOnly.value:
                         # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
                         first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
 
