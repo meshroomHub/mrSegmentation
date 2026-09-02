@@ -1,4 +1,4 @@
-__version__ = "1.1"
+__version__ = "1.2"
 
 import logging
 import os
@@ -114,11 +114,18 @@ Matting node for video sequences.
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
         ),
         desc.File(
+            name="cryptomatteFolder",
+            label="Cryptomatte Folder",
+            description="Output path for the cryptomattes.",
+            value="{nodeCacheFolder}/cryptomattes",
+            enabled=lambda node: node.outputCryptomatte.value,
+        ),
+        desc.File(
             name="cryptomatte",
             label="Cryptomatte",
             description="Cryptomatte embedded in EXR images.",
             semantic="image",
-            value=lambda attr: "{nodeCacheFolder}/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
+            value=lambda attr: "{nodeCacheFolder}/cryptomattes/cryptomatte_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + ".exr",
             enabled=lambda node: node.outputCryptomatte.value,
         ),
     ]
@@ -157,12 +164,12 @@ Matting node for video sequences.
                         mask_filename = "colorMask_%PROMPT%_merged_" + str(filename)
                         input_file_mask = os.path.join(mask_path, mask_filename + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, filename + "." + output_ext)
-                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + filename + ".exr")
+                    output_cryptomatte_path = os.path.join(output_dir, "cryptomattes", "cryptomatte_" + filename + ".exr")
                 else:
                     if mask_path:
                         input_file_mask = os.path.join(mask_path, str(view_id) + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, str(view_id) + "." + output_ext)
-                    output_cryptomatte_path = os.path.join(output_dir, "cryptomatte_" + str(view_id) + ".exr")
+                    output_cryptomatte_path = os.path.join(output_dir, "cryptomattes", "cryptomatte_" + str(view_id) + ".exr")
                 paths.append((input_file, input_file_mask, frame_id, str(view_id), output_file_matte,
                               output_cryptomatte_path, img_width, img_height, par))
             paths.sort(key=lambda x: x[0])
@@ -398,6 +405,9 @@ Matting node for video sequences.
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
+
+            if chunk.node.outputCryptomatte.value and not os.path.exists(chunk.node.cryptomatteFolder.value):
+                os.mkdir(chunk.node.cryptomatteFolder.value)
 
             device = torch.device("cuda") if torch.cuda.is_available() and chunk.node.useGpu.value else torch.device("cpu")
             model_path = os.getenv("VIDEOMATTING_SR_MODELS_PATH")
