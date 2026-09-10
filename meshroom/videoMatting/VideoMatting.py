@@ -66,14 +66,12 @@ Matting node for video sequences.
         ),
         desc.FloatParam(
             name="matteBlackPointLevel",
-            label="Matte Black Point Level",
             description="Threshold below which a matte value is forced to 0.",
             value=0.012,
             exposed=False,
         ),
         desc.ChoiceParam(
             name="upsamplingFilter",
-            label="Upsampling Filter",
             description="Upsampling filter to be used if necessary depending on the inference size.",
             value="lanczos4",
             values=["lanczos4", "cubic", "linear"],
@@ -81,7 +79,6 @@ Matting node for video sequences.
         ),
          desc.BoolParam(
             name="blurMatte",
-            label="Blur Matte",
             description="Apply a 3x3 box blur on every mattes. This occurs after thresholding at the matte black point level.",
             value=True,
         ),
