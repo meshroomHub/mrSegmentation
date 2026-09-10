@@ -82,7 +82,7 @@ Matting node for video sequences.
          desc.BoolParam(
             name="blurMatte",
             label="Blur Matte",
-            description="Apply a 3x3 box blur on every mattes. Occur after thresholding down at the matte black point level.",
+            description="Apply a 3x3 box blur on every mattes. This occurs after thresholding at the matte black point level.",
             value=True,
         ),
          desc.BoolParam(
@@ -590,7 +590,7 @@ Matting node for video sequences.
                                     box_w = x2 - x1
                                     box_h = y2 - y1
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
-                                    alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
+                                    alpha = self._restore_image_size(output_frame, (box_w, box_h), method, chunk.node.upsamplingFilter.value)
                                     alpha[alpha < chunk.node.matteBlackPointLevel.value] = 0.0
                                     if chunk.node.blurMatte.value:
                                         alpha = cv2.blur(alpha, (3, 3))

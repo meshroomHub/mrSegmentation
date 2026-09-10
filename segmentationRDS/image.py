@@ -321,7 +321,7 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
     crypto_data_buf = oiio.ImageBuf(spec_crypto)
     crypto_data_buf.set_pixels(oiio.ROI.All, np.ascontiguousarray(crypto_data, dtype=np.float32))
     if crypto_data_buf.has_error:
-        print(f"Error : {crypto_data_buf.get_error()}")
+        print(f"Error : {crypto_data_buf.geterror()}")
 
     out = oiio.ImageOutput.create(str(filepath))
     if not out:
