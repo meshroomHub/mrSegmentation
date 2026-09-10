@@ -21,28 +21,27 @@ This module implements a Meshroom matting node based on the MEMatte
 (Memory Efficient Matting) network. It generates high-quality alpha
 mattes from images using either binary masks or trimaps as input prompts.
 
-The general processing pipeline is:
------------------------------------
-- 1. Load SfM data and associated masks/trimaps
-- 2. If a binary mask is provided, convert it to a trimap via Gaussian blur or morphological operations
-- 3. For each detected object (bounding box), crop the region of interest
-- 4. Resize the region if it exceeds the maximum inference size
-- 5. Run MEMatte inference to generate the alpha matte
-- 6. Save the output mattes and trimaps
+### The general processing pipeline is:
 
-Available Models:
------------------
-- Large-Comp1k: MEMatte_ViTB_DIM ; Trained on Composition-1k
-- Small-Comp1k: MEMatte_ViTS_DIM ; Lightweight version
-- Small-AIM500: MEMatte          ; Trained on AIM500
+1. Load SfM data and associated masks/trimaps
+2. If a binary mask is provided, convert it to a trimap via Gaussian blur or morphological operations
+3. For each detected object (bounding box), crop the region of interest
+4. Resize the region if it exceeds the maximum inference size
+5. Run MEMatte inference to generate the alpha matte
+6. Save the output mattes and trimaps
 
-Known Limitations:
-------------------
+### Available Models
+
+- Large-Comp1k: MEMatte_ViTB_DIM; Trained on Composition-1k
+- Small-Comp1k: MEMatte_ViTS_DIM; Lightweight version
+- Small-AIM500: MEMatte; Trained on AIM500
+
+### Known Limitations
+
 - Requires a SfMData file (.sfm or .abc) as input.
 - Either a mask or a trimap must be provided, but not both simultaneously.
 - If no trimap transition region (value 0.5) is found in a bounding box,
   processing stops with an error for that frame.
-
 """
 
     inputs = [
@@ -84,7 +83,6 @@ Known Limitations:
         ),
         desc.IntParam(
             name="kernelSize",
-            label="Kernel Size",
             description="Gaussian blur kernel size or Erode/Dilate rectangle kernel size.",
             value=31,
             range=(3,1000,1),
@@ -106,7 +104,6 @@ Known Limitations:
         ),
         desc.BoolParam(
             name="limitInferenceSize",
-            label="Limit Inference Size",
             description="If enabled, input image and trimap will be resized if needed.",
             value=True,
         ),
@@ -128,7 +125,6 @@ Known Limitations:
         ),
         desc.BoolParam(
             name="keepFilename",
-            label="Keep Filename",
             description="Keep the filename of the inputs for the outputs.",
             value=True,
         ),
@@ -143,7 +139,6 @@ Known Limitations:
         ),
         desc.ChoiceParam(
             name="verboseLevel",
-            label="Verbose Level",
             description="Verbosity level (fatal, error, warning, info, debug).",
             value="info",
             values=VERBOSE_LEVEL,
@@ -160,14 +155,12 @@ Known Limitations:
         ),
         desc.File(
             name="matte",
-            label="Matte",
             description="Generated mattes.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
         ),
         desc.File(
             name="trimap",
-            label="Trimap",
             description="Trimap computed from input mask.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/trimap_" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
