@@ -251,29 +251,40 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
     preview = None if preview is None else np.asarray(preview)
     has_preview = preview is not None
     single_layer = crypto_id.ndim == 2 and crypto_cov.ndim == 2
-    nchan = (4 if has_preview else 0) + (4 if single_layer else 8) # 4 layers max
-
-    spec = oiio.ImageSpec(w, h, nchan, oiio.FLOAT)
 
     ch = []
     if has_preview:
-        ch += ["R", "G", "B", "A"]
-    ch += [
-        f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue",  f"{crypto_name}00.alpha"
-    ]
+        spec_beauty = oiio.ImageSpec(w, h, 4, oiio.HALF)
+        spec_beauty.channelnames = ["R", "G", "B", "A"]
+        spec_beauty.attribute("compression", "dwaa")
+        spec_beauty.attribute("oiio:subimagename", "rgba")
+        spec_beauty.attribute("dwaCompressionLevel", 45)
+
+    ch += [f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue",  f"{crypto_name}00.alpha"]
+
     if not single_layer:
-        ch += [
-            f"{crypto_name}01.red", f"{crypto_name}01.green", f"{crypto_name}01.blue",  f"{crypto_name}01.alpha"
-        ]
-    spec.channelnames = ch
+        ch += [f"{crypto_name}01.red", f"{crypto_name}01.green", f"{crypto_name}01.blue",  f"{crypto_name}01.alpha"]
+
+    nchan_crypto = len(ch)
+    spec_crypto = oiio.ImageSpec(w, h, nchan_crypto, oiio.FLOAT)
+    spec_crypto.channelnames = ch
+    spec_crypto.attribute("compression", "zip")
+    spec_crypto.attribute("oiio:subimagename", "crypto_object")
 
     _, _, h32 = hash_name(crypto_name)
     crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
-    spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
-    spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
-    spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
-    spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
-    spec.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
+    spec_crypto.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
+    spec_crypto.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
+    spec_crypto.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
+    spec_crypto.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
+    spec_crypto.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
+
+    if has_preview:
+        spec_beauty.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
+        spec_beauty.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
+        spec_beauty.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
+        spec_beauty.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
+        spec_beauty.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
 
     zeros = np.zeros((h, w), dtype=np.float32)
 
@@ -293,7 +304,7 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
             preview_rgba = preview.astype(np.float32)
         else:
             raise ValueError(f"Unsupported channel count in preview: {c} (expected 3 or 4)")
-        parts.append(preview_rgba)
+        preview_data = oiio.ImageBuf(np.ascontiguousarray(preview_rgba, dtype=np.float32))
 
     if not single_layer:
         id0, id1, id2, id3 = (crypto_id[..., 0], crypto_id[..., 1], crypto_id[..., 2], crypto_id[..., 3])
@@ -306,22 +317,36 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
         crypto00 = np.dstack((crypto_id.astype(np.float32), crypto_cov.astype(np.float32), zeros, zeros))
         parts.append(crypto00)
 
-    data = np.dstack(parts).astype(np.float32, copy=False)
+    crypto_data = np.dstack(parts).astype(np.float32, copy=False)
+    crypto_data_buf = oiio.ImageBuf(spec_crypto)
+    crypto_data_buf.set_pixels(oiio.ROI.All, np.ascontiguousarray(crypto_data, dtype=np.float32))
+    if crypto_data_buf.has_error:
+        print(f"Error : {crypto_data_buf.geterror()}")
 
     out = oiio.ImageOutput.create(str(filepath))
     if not out:
         raise RuntimeError(f"Cannot create ImageOutput for {filepath}")
-    if not out.open(str(filepath), spec):
-        err = out.geterror()
-        out.close()
-        raise RuntimeError(f"Cannot open {filepath}: {err}")
 
-    ok = out.write_image(data)
-    err = out.geterror()
+    if has_preview: 
+        if not out.open(str(filepath), (spec_beauty, spec_crypto)):
+            err = out.geterror()
+            out.close()
+            raise RuntimeError(f"Cannot open {filepath}: {err}")
+        preview_data.write(out)
+        if not out.open(str(filepath), spec_crypto, "AppendSubImage"):
+            err = out.geterror()
+            out.close()
+            raise RuntimeError(f"Cannot open {filepath} in mode AppendSubImage: {err}")
+        crypto_data_buf.write(out)
+    else:
+        if not out.open(str(filepath), spec_crypto):
+            err = out.geterror()
+            out.close()
+            raise RuntimeError(f"Cannot open {filepath}: {err}")
+        crypto_data_buf.write(out)
+
     out.close()
-    if not ok:
-        raise RuntimeError(f"Write failed: {err}")
-   
+
 def write_exr_hxwx1_float_lossless(path, img_hxwx1):
     """
     img_hxwx1: numpy array shape (H, W, 1) or (H, W), dtype float32 preferred

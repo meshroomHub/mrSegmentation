@@ -1,4 +1,4 @@
-__version__ = "1.2"
+__version__ = "1.3"
 
 import logging
 import os
@@ -64,7 +64,25 @@ Matting node for video sequences.
             description="Extension factor of bounding boxes containing binary masks.",
             value=1.1,
         ),
-        desc.BoolParam(
+        desc.FloatParam(
+            name="matteBlackPointLevel",
+            description="Threshold below which a matte value is forced to 0.",
+            value=0.012,
+            exposed=False,
+        ),
+        desc.ChoiceParam(
+            name="upsamplingFilter",
+            description="Upsampling filter to be used if necessary depending on the inference size.",
+            value="lanczos4",
+            values=["lanczos4", "cubic", "linear"],
+            exclusive=True,
+        ),
+         desc.BoolParam(
+            name="blurMatte",
+            description="Apply a 3x3 box blur on every mattes. This occurs after thresholding at the matte black point level.",
+            value=True,
+        ),
+         desc.BoolParam(
             name="useGpu",
             label="Use GPU",
             description="Use GPU for computation if available.",
@@ -207,12 +225,13 @@ Matting node for video sequences.
 
         return "pad", self._padx8_image(image)
 
-    def _restore_image_size(self, image, original_size, method):
+    def _restore_image_size(self, image, original_size, method, upsampling_filter="lanczos4"):
         import cv2
 
         original_width, original_height = original_size
         if method == "resize":
-            restored_image = cv2.resize(image, (original_width, original_height), interpolation=cv2.INTER_LINEAR)
+            interp = cv2.INTER_LANCZOS4 if upsampling_filter=="lanczos4" else cv2.INTER_CUBIC if upsampling_filter=="cubic" else cv2.INTER_LINEAR
+            restored_image = cv2.resize(image, (original_width, original_height), interpolation=interp)
         else:
             restored_image = image[0:original_height, 0:original_width, :]
         return restored_image
@@ -568,7 +587,10 @@ Matting node for video sequences.
                                     box_w = x2 - x1
                                     box_h = y2 - y1
                                     output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
-                                    alpha = self._restore_image_size(output_frame, (box_w, box_h), method)
+                                    alpha = self._restore_image_size(output_frame, (box_w, box_h), method, chunk.node.upsamplingFilter.value)
+                                    alpha[alpha < chunk.node.matteBlackPointLevel.value] = 0.0
+                                    if chunk.node.blurMatte.value:
+                                        alpha = cv2.blur(alpha, (3, 3))
                                     full_alpha[frame_id][y1:y2, x1:x2, :] += alpha
                                     if chunk.node.outputCryptomatte.value:
                                         obj_name = text_prompt.replace(" ", "_")
