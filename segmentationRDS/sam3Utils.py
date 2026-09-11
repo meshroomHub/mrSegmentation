@@ -139,6 +139,10 @@ def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict]) -> di
     else:
         mask = det_fwd["mask"] if det_fwd["mask"] is not None else det_bwd["mask"]
 
+    if mask is None or not np.any(mask):
+        box = w_f * det_fwd["box_xywh"] + w_b * det_bwd["box_xywh"]
+        return {"prob": prob, "box_xywh": box, "mask": mask}
+    
     rows = np.any(mask, axis=1)
     cols = np.any(mask, axis=0)
     y_min, y_max = np.where(rows)[0][[0, -1]]
@@ -150,7 +154,7 @@ def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict]) -> di
     box = (int(x), int(y), int(w), int(h))
 
     _, _, wf, hf = det_fwd["box_xywh"]
-    if wf < 1.0 and hf < 1.0: # Normalized coordinates
+    if wf <= 1.0 and hf <= 1.0: # Normalized coordinates
         H, W = mask.shape
         x /= W
         y /= H
