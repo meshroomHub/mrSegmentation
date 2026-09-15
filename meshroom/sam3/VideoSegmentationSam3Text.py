@@ -1,4 +1,4 @@
-__version__ = "2.1"
+__version__ = "2.2"
 
 import copy
 import logging
@@ -131,10 +131,23 @@ cryptomatte from a text prompt.
             value="{nodeCacheFolder}",
         ),
         desc.File(
+            name="bboxesFile",
+            label="Bounding Boxes File",
+            description="Output json file containing mask bounding boxes.",
+            value="{nodeCacheFolder}/bboxes.json",
+        ),
+        desc.File(
             name="masks",
             description="Generated segmentation masks.",
             semantic="image",
             value=lambda attr: "{nodeCacheFolder}/" + ("<FILESTEM>" if attr.node.keepFilename.value else "<VIEW_ID>") + "." + attr.node.extensionOut.value,
+        ),
+        desc.File(
+            name="colorMasksFwdFolder",
+            label="Colored Masks Forward Folder",
+            description="Output path for the color masks resulting from forward tracking results.",
+            value="{nodeCacheFolder}/colorMasks/fwd",
+            enabled=lambda node: node.outputColorMasks.value,
         ),
         desc.File(
             name="colorMasksFwd",
@@ -146,12 +159,26 @@ cryptomatte from a text prompt.
             enabled=lambda node: node.outputColorMasks.value,
         ),
         desc.File(
+            name="colorMasksBwdFolder",
+            label="Colored Masks Backward Folder",
+            description="Output path for the color masks resulting from backward tracking results.",
+            value="{nodeCacheFolder}/colorMasks/bwd",
+            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
+        ),
+        desc.File(
             name="colorMasksBwd",
             label="Colored Masks Backward",
             description="Colored segmentation masks resulting from backward propagation.\n"
                         "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
+            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
+        ),
+        desc.File(
+            name="colorMasksMergedFolder",
+            label="Colored Masks Merged Folder",
+            description="Output path for the color masks resulting from merging forward and backward tracking results.",
+            value="{nodeCacheFolder}/colorMasks/merged",
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
         ),
         desc.File(
@@ -162,6 +189,13 @@ cryptomatte from a text prompt.
             semantic="image",
             value=None,
             enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
+        ),
+        desc.File(
+            name="cryptomatteFolder",
+            label="Cryptomatte Folder",
+            description="Output path for the cryptomattes.",
+            value="{nodeCacheFolder}/cryptomattes",
+            enabled=lambda node: node.outputCryptomatte.value,
         ),
         desc.File(
             name="cryptomatte",
@@ -273,7 +307,7 @@ cryptomatte from a text prompt.
         dir_prefix = prefix_map[direction_name]
 
         ext_map = {
-            "forward": ".exr",
+            "forward": ".exr" if not node.combineFwdAndBwdSeg.value else ".png",
             "backward": ".png",
             "merged": ".exr"
         }
@@ -357,7 +391,7 @@ cryptomatte from a text prompt.
 
             # Save color mask image
             if node.outputColorMasks.value:
-                prefix = f"colorMask_{text_prompt}_{dir_prefix}_"
+                prefix = f"colorMasks/{dir_prefix}/colorMask_{text_prompt}_{dir_prefix}_"
                 output_file_color_mask = self._build_output_path(node, frame_id, prefix, color_mask_ext)
                 opt_write = avimg.ImageWriteOptions()
                 opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
@@ -374,7 +408,7 @@ cryptomatte from a text prompt.
 
             # Save Cryptomatte Multichannel EXR
             if output_crypto:
-                prefix = f"cryptomatte_{text_prompt}_{dir_prefix}_"
+                prefix = f"cryptomattes/cryptomatte_{text_prompt}_{dir_prefix}_"
                 cryptomatte_path = self._build_output_path(node, frame_id, prefix, ".exr")
                 image.writeCryptomatte(
                     cryptomatte_path,
@@ -508,12 +542,15 @@ cryptomatte from a text prompt.
 
         src_filename = "<FILESTEM>" if node.keepFilename.value else "<VIEW_ID>"
 
-        color_mask_prefix = node.output.value + "/colorMask_" + self.text_prompts[0]
-        cryptomatte_prefix = node.output.value + "/cryptomatte_" + self.text_prompts[0]
+        color_mask_prefix = node.output.value + "/colorMasks"
+        color_mask_fwd_prefix = color_mask_prefix + "/fwd/colorMask_" + self.text_prompts[0]
+        color_mask_bwd_prefix = color_mask_prefix + "/bwd/colorMask_" + self.text_prompts[0]
+        color_mask_merged_prefix = color_mask_prefix + "/merged/colorMask_" + self.text_prompts[0]
+        cryptomatte_prefix = node.output.value + "/cryptomattes/cryptomatte_" + self.text_prompts[0]
 
-        node.colorMasksFwd.value = color_mask_prefix + "_fwd_" + src_filename + ".exr"
-        node.colorMasksBwd.value = color_mask_prefix + "_bwd_" + src_filename + ".png"
-        node.colorMasksMerged.value = color_mask_prefix + "_merged_" + src_filename + ".exr"
+        node.colorMasksFwd.value = color_mask_fwd_prefix + "_fwd_" + src_filename + (".exr" if not node.combineFwdAndBwdSeg.value else ".png")
+        node.colorMasksBwd.value = color_mask_bwd_prefix + "_bwd_" + src_filename + ".png"
+        node.colorMasksMerged.value = color_mask_merged_prefix + "_merged_" + src_filename + ".exr"
         node.cryptomatte.value = cryptomatte_prefix + ("_merged_" if node.combineFwdAndBwdSeg.value else "_fwd_") + src_filename + ".exr"
 
     def processChunk(self, chunk):
@@ -538,6 +575,16 @@ cryptomatte from a text prompt.
 
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
+            if chunk.node.outputCryptomatte.value and not os.path.exists(chunk.node.cryptomatteFolder.value):
+                os.mkdir(chunk.node.cryptomatteFolder.value)
+            if chunk.node.outputColorMasks.value and not os.path.exists(chunk.node.output.value + "/colorMasks"):
+                os.mkdir(chunk.node.output.value + "/colorMasks")
+            if chunk.node.outputColorMasks.value and not os.path.exists(chunk.node.colorMasksFwdFolder.value):
+                os.mkdir(chunk.node.colorMasksFwdFolder.value)
+            if chunk.node.outputColorMasks.value and chunk.node.combineFwdAndBwdSeg.value and not os.path.exists(chunk.node.colorMasksBwdFolder.value):
+                os.mkdir(chunk.node.colorMasksBwdFolder.value)
+            if chunk.node.outputColorMasks.value and chunk.node.combineFwdAndBwdSeg.value and not os.path.exists(chunk.node.colorMasksMergedFolder.value):
+                os.mkdir(chunk.node.colorMasksMergedFolder.value)
 
             gpus_to_use = [torch.cuda.current_device()]
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue,
@@ -694,7 +741,7 @@ cryptomatte from a text prompt.
                                  source_info["w_ori"], source_info["orientation"],
                                  source_info["PAR"], frame_metadata_deep_model, opt_write)
 
-            json_filename = chunk.node.output.value + "/bboxes.json"
+            json_filename = chunk.node.bboxesFile.value
             logger.info(f"Writing bounding boxes metadata to {json_filename}")
             with open(json_filename, "w", encoding="utf_8") as file:
                 json.dump(boxes, file, indent=4, ensure_ascii=False)
