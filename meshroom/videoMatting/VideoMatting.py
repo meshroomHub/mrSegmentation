@@ -180,7 +180,7 @@ Matting node for video sequences.
                     filename = Path(input_file).stem
                     if mask_path:
                         mask_filename = "colorMask_%PROMPT%_merged_" + str(filename)
-                        input_file_mask = os.path.join(mask_path, mask_filename + "." + mask_ext)
+                        input_file_mask = os.path.join(mask_path, "colorMasks", "merged", mask_filename + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, filename + "." + output_ext)
                     output_cryptomatte_path = os.path.join(output_dir, "cryptomattes", "cryptomatte_" + filename + ".exr")
                 else:
@@ -529,9 +529,9 @@ Matting node for video sequences.
                                 mask_path = mask_path.replace("%PROMPT%", text_prompt)
                                 color_mask = True
                                 if not os.path.exists(mask_path):
-                                    mask_path = mask_path.replace("_merged_", "_fwd_")
+                                    mask_path = mask_path.replace("merged", "fwd")
                                     if not os.path.exists(mask_path):
-                                        mask_path = mask_path.replace(f"colorMask_{text_prompt}_fwd_", "")
+                                        mask_path = mask_path.replace(f"colorMasks/fwd/colorMask_{text_prompt}_fwd_", "")
                                         color_mask = False
                                 mask, _, _, _, _ = image.loadImage(mask_path, True, True, False)
                                 img_buf = oiio.ImageBuf(mask)
