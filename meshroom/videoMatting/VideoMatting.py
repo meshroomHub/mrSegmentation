@@ -32,6 +32,12 @@ Matting node for video sequences.
             description="Folder containing the masks used as prompt.",
             value="",
         ),
+        desc.File(
+            name="bboxesFile",
+            label="Bounding Boxes File",
+            description="File containing mask bounding boxes (.json).",
+            value="",
+        ),
         desc.ChoiceParam(
             name="extensionMask",
             label="Mask File Extension",
@@ -160,8 +166,6 @@ Matting node for video sequences.
             raise FileNotFoundError(f"Input path for masks '{mask_path}' does not exist.")
         if Path(input_path).suffix.lower() not in [".sfm", ".abc"]:
             raise ValueError(f"Input path '{input_path}' is not a valid sfmData file.")
-        if not os.path.exists(os.path.join(mask_path,"bboxes.json")):
-            raise FileNotFoundError("No file containing bounding boxes.")
 
         av_data = sfmData.SfMData()
         if sfmDataIO.load(av_data, input_path, sfmDataIO.ALL) and os.path.isdir(output_dir):
@@ -456,7 +460,10 @@ Matting node for video sequences.
             }
 
             # bboxes.json decoding
-            json_path = os.path.join(chunk.node.inputMask.value, "bboxes.json")
+            json_path = chunk.node.bboxesFile.value
+            if not os.path.exists(json_path):
+                raise FileNotFoundError("No file containing bounding boxes provided.")
+            
             frame_w = chunk_image_paths[0][6]
             frame_h = chunk_image_paths[0][7]
             par = chunk_image_paths[0][8]

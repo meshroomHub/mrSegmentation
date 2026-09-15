@@ -131,6 +131,12 @@ cryptomatte from a text prompt.
             value="{nodeCacheFolder}",
         ),
         desc.File(
+            name="bboxesFile",
+            label="Bounding Boxes File",
+            description="Output json file containing mask bounding boxes.",
+            value="{nodeCacheFolder}/bboxes.json",
+        ),
+        desc.File(
             name="masks",
             description="Generated segmentation masks.",
             semantic="image",
@@ -735,7 +741,7 @@ cryptomatte from a text prompt.
                                  source_info["w_ori"], source_info["orientation"],
                                  source_info["PAR"], frame_metadata_deep_model, opt_write)
 
-            json_filename = chunk.node.output.value + "/bboxes.json"
+            json_filename = chunk.node.bboxesFile.value
             logger.info(f"Writing bounding boxes metadata to {json_filename}")
             with open(json_filename, "w", encoding="utf_8") as file:
                 json.dump(boxes, file, indent=4, ensure_ascii=False)
