@@ -1,4 +1,4 @@
-__version__ = "1.3"
+__version__ = "1.4"
 
 import logging
 import os
@@ -30,6 +30,12 @@ Matting node for video sequences.
             name="inputMask",
             label="Mask Folder",
             description="Folder containing the masks used as prompt.",
+            value="",
+        ),
+        desc.File(
+            name="bboxesFile",
+            label="Bounding Boxes File",
+            description="File containing mask bounding boxes (.json).",
             value="",
         ),
         desc.ChoiceParam(
@@ -160,8 +166,6 @@ Matting node for video sequences.
             raise FileNotFoundError(f"Input path for masks '{mask_path}' does not exist.")
         if Path(input_path).suffix.lower() not in [".sfm", ".abc"]:
             raise ValueError(f"Input path '{input_path}' is not a valid sfmData file.")
-        if not os.path.exists(os.path.join(mask_path,"bboxes.json")):
-            raise FileNotFoundError("No file containing bounding boxes.")
 
         av_data = sfmData.SfMData()
         if sfmDataIO.load(av_data, input_path, sfmDataIO.ALL) and os.path.isdir(output_dir):
@@ -180,7 +184,7 @@ Matting node for video sequences.
                     filename = Path(input_file).stem
                     if mask_path:
                         mask_filename = "colorMask_%PROMPT%_merged_" + str(filename)
-                        input_file_mask = os.path.join(mask_path, mask_filename + "." + mask_ext)
+                        input_file_mask = os.path.join(mask_path, "colorMasks", "merged", mask_filename + "." + mask_ext)
                     output_file_matte = os.path.join(output_dir, filename + "." + output_ext)
                     output_cryptomatte_path = os.path.join(output_dir, "cryptomattes", "cryptomatte_" + filename + ".exr")
                 else:
@@ -456,7 +460,10 @@ Matting node for video sequences.
             }
 
             # bboxes.json decoding
-            json_path = os.path.join(chunk.node.inputMask.value, "bboxes.json")
+            json_path = chunk.node.bboxesFile.value
+            if not os.path.exists(json_path):
+                raise FileNotFoundError("No file containing bounding boxes provided.")
+            
             frame_w = chunk_image_paths[0][6]
             frame_h = chunk_image_paths[0][7]
             par = chunk_image_paths[0][8]
@@ -529,9 +536,9 @@ Matting node for video sequences.
                                 mask_path = mask_path.replace("%PROMPT%", text_prompt)
                                 color_mask = True
                                 if not os.path.exists(mask_path):
-                                    mask_path = mask_path.replace("_merged_", "_fwd_")
+                                    mask_path = mask_path.replace("merged", "fwd")
                                     if not os.path.exists(mask_path):
-                                        mask_path = mask_path.replace(f"colorMask_{text_prompt}_fwd_", "")
+                                        mask_path = mask_path.replace(f"colorMasks/fwd/colorMask_{text_prompt}_fwd_", "")
                                         color_mask = False
                                 mask, _, _, _, _ = image.loadImage(mask_path, True, True, False)
                                 img_buf = oiio.ImageBuf(mask)
