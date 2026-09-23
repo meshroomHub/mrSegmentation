@@ -14,6 +14,18 @@ class TrackChunk:
     def __repr__(self):
         return f"TrackChunk(frames={self.start_frame}-{self.end_frame}, n={len(self.boxes)})"
 
+@dataclass
+class TrackChunkWithSlices:
+    """A chunk of consecutive slices of frames with their boxes."""
+    start_frame   : int
+    end_frame     : int
+    slices        : list
+
+    #boxes         : dict = field(default_factory=dict)  # {frame_idx: [x1, y1, x2, y2]}
+
+    def __repr__(self):
+        return f"TrackChunkWithSlices(frames={self.start_frame}-{self.end_frame}, s={len(self.slices)})"
+
 
 def compute_par_dimensions(frame_w: int, frame_h: int, par: float) -> tuple[int, int]:
     """
@@ -183,6 +195,47 @@ def split_into_chunks(boxes: dict) -> list[TrackChunk]:
     return chunks
 
 
+def split_into_chunks_with_slices(boxes: dict, slice_size: int, overlap: int) -> list[TrackChunkWithSlices]:
+    """
+    Split dictionnary {frame_idx: box} in sliced chunks of consecutive frames.
+    """
+    if not boxes:
+        return []
+
+    sorted_frames = sorted(boxes.keys())
+    chunks = []
+    chunk_boxes = {sorted_frames[0]: boxes[sorted_frames[0]]}
+
+    slices = []
+    slice = {sorted_frames[0]: boxes[sorted_frames[0]]}
+
+    for prev_frame, curr_frame in zip(sorted_frames, sorted_frames[1:]):
+        if curr_frame == prev_frame + 1:
+            slice[curr_frame] = (boxes[curr_frame])
+            if len(slice) == slice_size:
+                slices.append(slice)
+                keys = [] if overlap==0 else list(slice.keys())[-overlap:]
+                slice = {k: slice[k] for k in keys}
+        else:
+            if len(slice) > overlap:
+                slices.append(slice)
+            chunks.append(TrackChunkWithSlices(
+                start_frame = min(slices[0].keys()),
+                end_frame   = max(slices[len(slices)-1].keys()),
+                slices      = slices
+            ))
+            slices = []
+
+    if len(slice) > overlap:
+        slices.append(slice)
+    chunks.append(TrackChunkWithSlices(
+        start_frame = min(slices[0].keys()),
+        end_frame   = max(slices[len(slices)-1].keys()),
+        slices      = slices
+    ))
+
+    return chunks
+
 def extract_tracking(
     json_path     : str,
     frame_w       : int,
@@ -266,6 +319,95 @@ def extract_tracking(
             chunks = split_into_chunks(expanded_boxes)
 
             result[key] = chunks
+
+    return result
+
+def extract_tracking_with_slices(
+    json_path     : str,
+    frame_w       : int,
+    frame_h       : int,
+    slice_size    : int,
+    overlap       : int,
+    exp_factor    : float = 1.0,
+    par           : float = 1.0,
+    logger        = None,
+) -> dict:
+    """
+    Extract bounding boxes per object and organize them in chunck and slices of consecutive frames.
+    Coordinates in the json file are supposed to be in the original source space, with the pixel aspect ratio not applied.
+    The pixel aspect ratio is applied by reducing the raw number to deliver coordinates in the display space.
+    Return a dictionnary :
+    {
+        "object_0_0": [TrackChunk[slice_0(frames=0 - slice_size-1), slice_1(frames=slice_size-1-overlap - 2*slice_size-1-overlap), ...], ...]
+        "object_0_1": [TrackChunk(slice_0(frames=0-3)]],
+        ...
+        "object_1_0": ...,
+        ...
+    }
+    """
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    result = {}
+
+    for label, directions in data.items():
+        forward  = directions.get("forward",  {})
+        merged = directions.get("merged", {})
+
+        all_object_ids = set()
+        if merged:
+            for frame_data in merged.values():
+                all_object_ids.update(frame_data.keys())
+        else:
+            for frame_data in forward.values():
+                all_object_ids.update(frame_data.keys())
+
+        for obj_id in sorted(all_object_ids, key=int):
+            key = f"{label}_{obj_id}"
+            raw_boxes = {}
+
+            if merged:
+                all_frames = sorted(set(merged.keys()),key=int)
+                for frame_idx in all_frames:
+                    box = merged.get(frame_idx,  {}).get(obj_id)
+                    if box:
+                        raw_boxes[int(frame_idx)] = box
+            else:
+                all_frames = sorted(set(forward.keys()),key=int)
+                for frame_idx in all_frames:
+                    box = forward.get(frame_idx,  {}).get(obj_id)
+                    if box:
+                        raw_boxes[int(frame_idx)] = box
+
+            # --- Split in chunks ---
+            chunks = split_into_chunks_with_slices(raw_boxes, slice_size, overlap)
+
+            for c, chunk in enumerate(chunks):
+                for s, slice in enumerate(chunk.slices):
+                    logger.info(f"chunks[{c}].slices[{s}] = {slice}")
+
+            for c, chunk in enumerate(chunks):
+                for s, slice in enumerate(chunk.slices):
+                    # --- compute target size ---
+                    target_size_w, target_size_h = get_target_size(slice, par, False, False, exp_factor)
+
+                    # --- Expand boxes in display space ---
+                    expanded_boxes = {}
+                    for frame_idx, box in slice.items():
+                        if target_size_w is not None:
+                            expanded = expand_box(box, target_size_w, target_size_h, par, frame_w, frame_h)
+                            expanded_boxes[frame_idx] = expanded
+                        else:
+                            expanded_boxes[frame_idx] = box
+
+                    chunks[c].slices[s] = expanded_boxes
+
+            result[key] = chunks
+
+        for key, chunks in result.items():
+            for c, chunk in enumerate(chunks):
+                for s, slice in enumerate(chunk.slices):
+                    logger.info(f"track[{key}].chunks[{c}].slices[{s}] = {slice}")
 
     return result
 
