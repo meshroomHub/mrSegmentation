@@ -1,4 +1,4 @@
-__version__ = "1.4"
+__version__ = "1.5"
 
 import logging
 import os
@@ -26,17 +26,17 @@ Matting node for video sequences.
             description="SfMData file.",
             value="",
         ),
+        desc.BoolParam(
+            name="maskInAlphaChannel",
+            description="Mask In Alpha Channel.",
+            value=False,
+        ),
         desc.File(
             name="inputMask",
             label="Mask Folder",
             description="Folder containing the masks used as prompt.",
             value="",
-        ),
-        desc.File(
-            name="bboxesFile",
-            label="Bounding Boxes File",
-            description="File containing mask bounding boxes (.json).",
-            value="",
+            enabled=lambda node: not node.maskInAlphaChannel.value,
         ),
         desc.ChoiceParam(
             name="extensionMask",
@@ -45,6 +45,13 @@ Matting node for video sequences.
             value="exr",
             values=["exr", "png", "jpg"],
             exclusive=True,
+            enabled=lambda node: not node.maskInAlphaChannel.value,
+        ),
+        desc.File(
+            name="bboxesFile",
+            label="Bounding Boxes File",
+            description="File containing mask bounding boxes (.json).",
+            value="",
         ),
         desc.ChoiceParam(
             name="inferenceSize",
@@ -83,12 +90,12 @@ Matting node for video sequences.
             values=["lanczos4", "cubic", "linear"],
             exclusive=True,
         ),
-         desc.BoolParam(
+        desc.BoolParam(
             name="blurMatte",
             description="Apply a 3x3 box blur on every mattes. This occurs after thresholding at the matte black point level.",
             value=True,
         ),
-         desc.BoolParam(
+        desc.BoolParam(
             name="useGpu",
             label="Use GPU",
             description="Use GPU for computation if available.",
@@ -411,6 +418,7 @@ Matting node for video sequences.
         import torch
         from pyalicevision import image as avimg
         import OpenImageIO as oiio
+        import re
 
         try:
             logger.setLevel(chunk.node.verboseLevel.value.upper())
@@ -464,15 +472,16 @@ Matting node for video sequences.
             if not os.path.exists(json_path):
                 raise FileNotFoundError("No file containing bounding boxes provided.")
             
+            batch_size = chunk.node.batchSize.value
+            overlap = chunk.node.overlap.value
+
             frame_w = chunk_image_paths[0][6]
             frame_h = chunk_image_paths[0][7]
             par = chunk_image_paths[0][8]
             first_frame_id = chunk_image_paths[0][2]
             exp_factor = chunk.node.boxExtensionFactor.value
-            bboxes = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False,
-                                                False, exp_factor, par)
-            bboxes_metadata = bboxUtils.extract_tracking(json_path, frame_w, frame_h, False, False, False,
-                                                         False, exp_factor, par)
+            bboxes = bboxUtils.extract_tracking_with_slices(json_path, frame_w, frame_h, batch_size, overlap, exp_factor, par, logger)
+
             metadata_boxes = {}
             for frame_id in range(len(chunk_image_paths)):
                 metadata_boxes[first_frame_id + frame_id] = {}
@@ -489,9 +498,6 @@ Matting node for video sequences.
                 full_alpha[image_path[2]] = np.zeros_like(img)
                 masks_by_frame[int(image_path[2])] = []
 
-            batch_size = chunk.node.batchSize.value
-            overlap = chunk.node.overlap.value
-
             color_palette = image.paletteGenerator()
 
             for key, frame_chunks in bboxes.items():
@@ -503,62 +509,88 @@ Matting node for video sequences.
 
                 for frame_chunk in frame_chunks:
                     logger.info(f"frame_chunk:\n{frame_chunk}")
-                    logger.debug(f"{frame_chunk.boxes}")
+                    logger.debug(f"{frame_chunk.slices}")
 
                     total_frames = frame_chunk.end_frame - frame_chunk.start_frame + 1
                     time_slices = self._generate_time_slices(total_frames, batch_size, overlap)
                     logger.debug(f"time_slices = {time_slices}")
 
-                    cond_frames = []
-                    mask_frames = []
+                    previous_alphas = {}
+
                     for slice_idx, (slice_start, slice_end) in enumerate(time_slices):
                         start_frame_id = frame_chunk.start_frame + slice_start
                         stop_frame_id = frame_chunk.start_frame + slice_end
                         logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{start_frame_id}, {stop_frame_id}[")
-                        if slice_idx > 0:
-                            if overlap > 0:
-                                cond_frames = cond_frames[-overlap:]
-                                mask_frames = mask_frames[-overlap:]
-                                start_frame_id += overlap
-                            else:
-                                cond_frames = []
-                                mask_frames = []
-                        for frame_id, box in frame_chunk.boxes.items():
+                        cond_frames = []
+                        mask_frames = []
+                        for frame_id, box in frame_chunk.slices[slice_idx].items():
                             if start_frame_id <= frame_id < stop_frame_id:
-                                img, h_ori, w_ori, _, orientation = image.loadImage(str(chunk_image_paths[frame_id - first_frame_id][0]), True)
+                                img, h_ori, w_ori, _, orientation = image.loadImage(str(chunk_image_paths[frame_id - first_frame_id][0]),
+                                                                                    True, True, True, chunk.node.maskInAlphaChannel.value)
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
-                                img_buf = oiio.ImageBuf(img)
+                                img_buf = oiio.ImageBuf(img[:,:,0:3])
                                 img_buf = oiio.ImageBufAlgo.crop(img_buf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = img_buf.get_pixels(format=oiio.FLOAT)
                                 method, frame = self._resize_image(img_crop, chunk.node.inferenceSize.value)
                                 resized_h, resized_w = frame.shape[:2]
-                                mask_path = str(chunk_image_paths[frame_id - first_frame_id][1])
-                                mask_path = mask_path.replace("%PROMPT%", text_prompt)
-                                color_mask = True
-                                if not os.path.exists(mask_path):
-                                    mask_path = mask_path.replace("merged", "fwd")
+
+                                if chunk.node.maskInAlphaChannel.value:
+                                    if img.shape[2] == 4:
+                                        a = (img[:,:,3] > 0.1).astype(np.float32)
+                                        alpha = np.stack([a, a, a], axis=-1).astype(np.float32)
+                                        img_buf = oiio.ImageBuf(alpha)
+                                    else:
+                                        raise ValueError("No alpha channel in source image, mask cannot be extracted.")
+                                else:
+                                    mask_path = str(chunk_image_paths[frame_id - first_frame_id][1])
+                                    mask_path = mask_path.replace("%PROMPT%", text_prompt)
+                                    color_mask = True
                                     if not os.path.exists(mask_path):
-                                        mask_path = mask_path.replace(f"colorMasks/fwd/colorMask_{text_prompt}_fwd_", "")
-                                        color_mask = False
-                                mask, _, _, _, _ = image.loadImage(mask_path, True, True, False)
-                                img_buf = oiio.ImageBuf(mask)
-                                if color_mask:
-                                    mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
-                                    color_index = 0 if obj_id=="" else int(obj_id)
-                                    color_palette.generate_palette(color_index + 1)
-                                    tgt = color_palette.at(color_index)
-                                    mask_id = np.zeros_like(img, dtype=np.float32)
-                                    mask_id[(mask_uint8 == tgt).all(axis = -1)] = [1.0, 1.0, 1.0]
-                                    img_buf = oiio.ImageBuf(mask_id)
+                                        mask_path = mask_path.replace("merged", "fwd")
+                                        if not os.path.exists(mask_path):
+                                            mask_path = mask_path.replace(f"colorMasks/fwd/colorMask_{text_prompt}_fwd_", "")
+                                            color_mask = False
+                                            if not os.path.exists(mask_path):
+                                                # search a file in the mask folder ending with ".####.ext"
+                                                # where #### is the frame number and ext the mask extension
+                                                frame_str = str(frame_id).zfill(4)
+                                                pattern = re.compile(rf'\.{frame_str}\.{re.escape(chunk.node.extensionMask.value)}$', re.IGNORECASE)
+                                                for file in Path(chunk.node.inputMask.value).iterdir():
+                                                    if file.is_file():
+                                                        if pattern.search(file.name):
+                                                            mask_path = str(file)
+                                                            break
+
+                                    mask, _, _, _, _ = image.loadImage(mask_path, True, True, False)
+                                    img_buf = oiio.ImageBuf(mask)
+                                    if color_mask:
+                                        mask_uint8 = np.rint(np.clip(mask * 255, 0, 255)).astype(np.uint8)
+                                        color_index = 0 if obj_id=="" else int(obj_id)
+                                        color_palette.generate_palette(color_index + 1)
+                                        tgt = color_palette.at(color_index)
+                                        mask_id = np.zeros_like(img, dtype=np.float32)
+                                        mask_id[(mask_uint8 == tgt).all(axis = -1)] = [1.0, 1.0, 1.0]
+                                        img_buf = oiio.ImageBuf(mask_id)
 
                                 img_buf = oiio.ImageBufAlgo.crop(img_buf, roi=oiio.ROI(x1, x2, y1, y2))
                                 img_crop = img_buf.get_pixels(format=oiio.FLOAT)
                                 if method == "resize":
-                                    mask = cv2.resize(img_crop, (resized_w, resized_h), interpolation=cv2.INTER_NEAREST)
+                                    img_buf = oiio.ImageBuf(img_crop)
+                                    img_crop_resized = oiio.ImageBufAlgo.resample(img_buf, interpolate=False, roi=oiio.ROI(0, resized_w, 0, resized_h, 0, 1, 0, 3))
+                                    mask = img_crop_resized.get_pixels(format=oiio.FLOAT)
                                 else:
+                                    img_crop = img_buf.get_pixels(format=oiio.FLOAT)
                                     mask = self._padx8_image(img_crop)
+
+                                frame_path = os.path.join(chunk.node.output.value, "frame_" + str(frame_id) + ".exr")
+                                mask_path  = os.path.join(chunk.node.output.value, "mask_" + str(frame_id) + ".exr")
+
+                                image.writeImage(str(frame_path), frame, frame.shape[0], frame.shape[1])
+                                image.writeImage(str(mask_path), mask, mask.shape[0], mask.shape[1])
+
                                 cond_frames.append(frame)
                                 mask_frames.append(mask)
+
                         nb_frames, shape = self._check_lists_compatibility(cond_frames, mask_frames)
                         logger.info(f"slice_idx = {slice_idx} ; {nb_frames} frames ; shape = {shape} ; method = {method}")
 
@@ -569,32 +601,39 @@ Matting node for video sequences.
                             logger.error(f"Error in VideoMatting inference at slice {slice_idx}: {ex}")
                             raise
 
-                        if slice_idx == 0:
-                            mix_frames = output_frames[0:overlap]
-                        else:
-                            mix_frames = []
-                            for i in range(overlap):
-                                new_weight = (i + 1) / (overlap + 1)
-                                blended_frame = (1.0 - new_weight) * previous_frames[i] + new_weight * output_frames[i].copy()
-                                mix_frames.append(blended_frame)
-
-                        if len(output_frames) >= overlap:
-                            previous_frames = copy.deepcopy(output_frames[-overlap:])
-
-                        if slice_idx > 0:
-                            start_frame_id -= overlap
-                        if slice_idx < len(time_slices) - 1:
-                            stop_frame_id -= overlap
-
-                        for frame_id, box in sorted(frame_chunk.boxes.items()):
+                        for frame_id, box in sorted(frame_chunk.slices[slice_idx].items()):
                             if frame_id >= start_frame_id and frame_id < stop_frame_id:
                                 frame_idx = frame_id - start_frame_id
+                                x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
+                                box_w = x2 - x1
+                                box_h = y2 - y1
+                                output_frame = output_frames[frame_idx].copy()
+                                curr_alpha = self._restore_image_size(output_frame, (box_w, box_h), method, chunk.node.upsamplingFilter.value)
+
+                                if slice_idx > 0 and frame_idx < overlap:
+                                    # Mixing with same frame in previous slice
+                                    px1, py1, px2, py2 = bboxUtils.box_to_display(frame_chunk.slices[slice_idx - 1][frame_id], source_info["PAR"])
+                                    cx1, cy1, cx2, cy2 = x1, y1, x2, y2
+                                    ix1 = max(px1, cx1)
+                                    iy1 = max(py1, cy1)
+                                    ix2 = min(px2, cx2)
+                                    iy2 = min(py2, cy2)
+                                    prev_alpha_aligned = np.zeros_like(curr_alpha)
+                                    if ix1 < ix2 and iy1 < iy2:
+                                        src_x1, src_y1 = ix1 - px1, iy1 - py1
+                                        src_x2, src_y2 = ix2 - px1, iy2 - py1
+                                        dst_x1, dst_y1 = ix1 - cx1, iy1 - cy1
+                                        dst_x2, dst_y2 = ix2 - cx1, iy2 - cy1
+                                        prev_alpha_aligned[dst_y1:dst_y2, dst_x1:dst_x2, ...] = previous_alphas[frame_id][src_y1:src_y2, src_x1:src_x2, ...]
+                                    
+                                    new_weight = (frame_idx + 1) / (overlap + 1)
+                                    alpha = (1.0 - new_weight) * prev_alpha_aligned + new_weight * curr_alpha
+
+                                    del previous_alphas[frame_id]
+                                else:
+                                    alpha = curr_alpha
+
                                 if frame_idx < batch_size - overlap or slice_idx == len(time_slices) - 1:
-                                    x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
-                                    box_w = x2 - x1
-                                    box_h = y2 - y1
-                                    output_frame = mix_frames[frame_idx] if frame_idx < overlap else output_frames[frame_idx].copy()
-                                    alpha = self._restore_image_size(output_frame, (box_w, box_h), method, chunk.node.upsamplingFilter.value)
                                     alpha[alpha < chunk.node.matteBlackPointLevel.value] = 0.0
                                     if chunk.node.blurMatte.value:
                                         alpha = cv2.blur(alpha, (3, 3))
@@ -609,19 +648,22 @@ Matting node for video sequences.
                                                                         "obj_id": obj_id,
                                                                         "x1": x1, "y1": y1, "x2": x2, "y2": y2,
                                                                         "path": roi_path})
+                                else:
+                                    previous_alphas[frame_id] = curr_alpha
 
-            for key, frame_chunks in bboxes_metadata.items():
+            for key, frame_chunks in bboxes.items():
                 if "_" in key:
                     text_prompt, obj_id = key.rsplit('_', 1)
                 else:
                     text_prompt, obj_id = key, "0"
                 for frame_chunk in frame_chunks:
-                    for frame_idx, box in sorted(frame_chunk.boxes.items()):
-                        if text_prompt not in metadata_boxes[frame_idx]:
-                            metadata_boxes[frame_idx][text_prompt] = {}
-                        x1, y1, x2, y2 = box
-                        bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
-                        metadata_boxes[frame_idx][text_prompt][text_prompt + "_" + str(obj_id)] = bbox_str
+                    for slice in frame_chunk.slices:
+                        for frame_idx, box in sorted(slice.items()):
+                            if text_prompt not in metadata_boxes[frame_idx]:
+                                metadata_boxes[frame_idx][text_prompt] = {}
+                            x1, y1, x2, y2 = box
+                            bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
+                            metadata_boxes[frame_idx][text_prompt][text_prompt + "_" + str(obj_id)] = bbox_str
 
             for frame_id, image_path in enumerate(chunk_image_paths):
                 opt_write = avimg.ImageWriteOptions()
