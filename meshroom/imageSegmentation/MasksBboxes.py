@@ -2,6 +2,7 @@ __version__ = "1.0"
 
 import logging
 import os
+from pathlib import Path
 
 from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
@@ -15,10 +16,17 @@ class MasksBboxes(desc.Node):
 
     inputs = [
         desc.File(
+            name="input",
+            description="SfMData file.",
+            value="",
+            enabled=lambda node: node.maskFolder.value=="",
+        ),
+        desc.File(
             name='maskFolder',
             label='Mask Folder',
-            description='maskFolder',
-            value='Folder containing the masks',
+            description='Folder containing the masks',
+            value="",
+            enabled=lambda node: node.input.value=="",
         ),
         desc.BoolParam(
             name='alphaOnly',
@@ -57,6 +65,34 @@ class MasksBboxes(desc.Node):
         ),
     ]
 
+    def resolve_paths(self, input_path):
+        from pyalicevision import sfmData, camera
+        from pyalicevision import sfmDataIO
+
+        paths = []
+        if not Path(input_path).exists():
+            raise FileNotFoundError(f"Input path '{input_path}' does not exist.")
+        if Path(input_path).suffix.lower() not in [".sfm", ".abc"]:
+            raise ValueError(f"Input path '{input_path}' is not a valid sfmData file.")
+
+        av_data = sfmData.SfMData()
+        if sfmDataIO.load(av_data, input_path, sfmDataIO.ALL):
+            views = av_data.getViews()
+            for _, view in views.items():
+                input_file = view.getImage().getImagePath()
+                frame_id = view.getFrameId()
+                img_width = view.getImage().getWidth()
+                img_height = view.getImage().getHeight()
+                intrinsic = av_data.getIntrinsicSharedPtr(view.getIntrinsicId())
+                pinhole = camera.Pinhole.cast(intrinsic)
+                par = 1.0
+                if pinhole is not None:
+                    par = pinhole.getPixelAspectRatio()
+                paths.append((input_file, frame_id, img_width, img_height, par))
+            paths.sort(key=lambda x: x[0])
+
+        return paths
+    
     def extract_frame_number(self, filepath, extension="exr"):
         import re
 
@@ -197,13 +233,18 @@ class MasksBboxes(desc.Node):
     def processChunk(self, chunk):
         import json
 
-        sorted_paths = self.list_exr_files_sorted(chunk.node.maskFolder.value, extension=chunk.node.extension.value)
+        sorted_paths = []
+        if chunk.node.maskFolder.value:
+            sorted_paths = self.list_exr_files_sorted(chunk.node.maskFolder.value, extension=chunk.node.extension.value)
+        elif chunk.node.input.value:
+            paths = self.resolve_paths(chunk.node.input.value)
+            sorted_paths = [f[0] for f in paths]
 
         frame_bboxes = {}
 
         for filepath in sorted_paths:
             frame_number = self.extract_frame_number(filepath, chunk.node.extension.value)
-            bboxes = self.process_exr_file(filepath, threshold=0.5, alpha_only=chunk.node.alphaOnly.value, first_only=chunk.node.firstOnly.value)
+            bboxes = self.process_exr_file(filepath, threshold=0.01, alpha_only=chunk.node.alphaOnly.value, first_only=chunk.node.firstOnly.value)
             if bboxes:
                 frame_bboxes[str(frame_number)] = bboxes
 
