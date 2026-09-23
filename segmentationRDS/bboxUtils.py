@@ -204,7 +204,6 @@ def split_into_chunks_with_slices(boxes: dict, slice_size: int, overlap: int) ->
 
     sorted_frames = sorted(boxes.keys())
     chunks = []
-    chunk_boxes = {sorted_frames[0]: boxes[sorted_frames[0]]}
 
     slices = []
     slice = {sorted_frames[0]: boxes[sorted_frames[0]]}
@@ -217,7 +216,7 @@ def split_into_chunks_with_slices(boxes: dict, slice_size: int, overlap: int) ->
                 keys = [] if overlap==0 else list(slice.keys())[-overlap:]
                 slice = {k: slice[k] for k in keys}
         else:
-            if len(slice) > overlap:
+            if slice and (not slices or len(slice) > overlap):
                 slices.append(slice)
             chunks.append(TrackChunkWithSlices(
                 start_frame = min(slices[0].keys()),
@@ -225,8 +224,9 @@ def split_into_chunks_with_slices(boxes: dict, slice_size: int, overlap: int) ->
                 slices      = slices
             ))
             slices = []
+            slice = {curr_frame: boxes[curr_frame]}
 
-    if len(slice) > overlap:
+    if slice and (not slices or len(slice) > overlap):
         slices.append(slice)
     chunks.append(TrackChunkWithSlices(
         start_frame = min(slices[0].keys()),

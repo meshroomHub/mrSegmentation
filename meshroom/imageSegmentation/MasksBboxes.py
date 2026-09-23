@@ -119,7 +119,7 @@ class MasksBboxes(desc.Node):
         if not folder.is_dir():
             raise NotADirectoryError(f"{folder} folder does not exist !")
 
-        candidates = list(folder.glob(f"*.{extension}"))
+        candidates = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() == f".{extension.lower()}"]
 
         files_with_frame = []
         for f in candidates:
@@ -213,21 +213,6 @@ class MasksBboxes(desc.Node):
                     bboxes[str(c)] = bbox
 
         return bboxes
-
-
-    def compute_frame_bboxes(self, filepaths, threshold=0.5, alpha_only=False, first_only=False):
-
-        frame_bboxes = {}
-
-        for filepath in filepaths:
-            frame_number = self.extract_frame_number(filepath, self.node.extension.value)
-
-            bboxes = self.process_exr_file(filepath, threshold=threshold, alpha_only=alpha_only, first_only=first_only)
-
-            if bboxes:
-                frame_bboxes[str(frame_number)] = bboxes
-
-        return frame_bboxes
 
 
     def processChunk(self, chunk):

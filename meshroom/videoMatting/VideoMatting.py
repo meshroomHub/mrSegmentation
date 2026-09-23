@@ -474,6 +474,8 @@ Matting node for video sequences.
             
             batch_size = chunk.node.batchSize.value
             overlap = chunk.node.overlap.value
+            if batch_size <= 0 or overlap <= 0 or overlap >= batch_size:
+                raise ValueError("batchSize must be positive and overlap must satisfy 0 <= overlap < batch_size.")
 
             frame_w = chunk_image_paths[0][6]
             frame_h = chunk_image_paths[0][7]
@@ -581,12 +583,6 @@ Matting node for video sequences.
                                 else:
                                     img_crop = img_buf.get_pixels(format=oiio.FLOAT)
                                     mask = self._padx8_image(img_crop)
-
-                                frame_path = os.path.join(chunk.node.output.value, "frame_" + str(frame_id) + ".exr")
-                                mask_path  = os.path.join(chunk.node.output.value, "mask_" + str(frame_id) + ".exr")
-
-                                image.writeImage(str(frame_path), frame, frame.shape[0], frame.shape[1])
-                                image.writeImage(str(mask_path), mask, mask.shape[0], mask.shape[1])
 
                                 cond_frames.append(frame)
                                 mask_frames.append(mask)
