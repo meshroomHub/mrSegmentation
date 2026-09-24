@@ -111,12 +111,12 @@ def fromRawToUsualOrientation(x, y, width, height, PAR, orientation):
         x1 = xtmp
     return(x1, y1)
 
-def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = True, srgb: bool = True):
+def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = True, srgb: bool = True, withAlpha: bool = False):
     oiio_input = oiio.ImageInput.open(imagePath)
     oiio_spec = oiio_input.spec()
     oiio_input.close()
 
-    av_image = avimg.Image_RGBfColor()
+    av_image = avimg.Image_RGBAfColor() if withAlpha else avimg.Image_RGBfColor()
     if srgb:
         avOptRead = avimg.ImageReadOptions(avimg.EImageColorSpace_SRGB)
     else:
