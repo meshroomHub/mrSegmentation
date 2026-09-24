@@ -1,66 +1,57 @@
 __version__ = "1.0"
 
 import logging
-import os
 from pathlib import Path
 
 from meshroom.core import desc
-from meshroom.core.utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("MasksBboxes")
 
 class MasksBboxes(desc.Node):
 
-    category = 'Utils'
-    documentation = '''Extract bounding boxes from a set of input masks'''
+    category = "Utils"
+    documentation = "Extract bounding boxes from a set of input masks."
 
     inputs = [
         desc.File(
             name="input",
             description="SfMData file.",
             value="",
-            enabled=lambda node: node.maskFolder.value=="",
+            enabled=lambda node: node.maskFolder.value == "",
         ),
         desc.File(
-            name='maskFolder',
-            label='Mask Folder',
-            description='Folder containing the masks',
+            name="maskFolder",
+            description="Folder containing the masks.",
             value="",
-            enabled=lambda node: node.input.value=="",
+            enabled=lambda node: node.input.value == "",
         ),
         desc.BoolParam(
-            name='alphaOnly',
-            label='Alpha Channel Only',
-            description='''Only the alpha channel of RGBA images or single channel images will be considered. Error in case of RGB images.''',
-            value=False
+            name="alphaOnly",
+            label="Alpha Channel Only",
+            description="Only the alpha channel of RGBA images or single channel images will be considered. Error in case of RGB images.",
+            value=False,
         ),
         desc.BoolParam(
-            name='firstOnly',
-            label='First Channel Only',
-            description='''Only the R channel of RGB or RGBA images will be considered. Single channel images will be processed as usual.''',
+            name="firstOnly",
+            label="First Channel Only",
+            description="Only the R channel of RGB or RGBA images will be considered. Single channel images will be processed as usual.",
             value=False
         ),
         desc.ChoiceParam(
-            name='extension',
-            label='Input File Extension',
-            description='Input image file extension.',
-            value='exr',
-            values=['exr', 'png', 'jpg'],
+            name="extension",
+            label="Input File Extension",
+            description="Input image file extension.",
+            value="exr",
+            values=["exr", "png", "jpg"],
             exclusive=True,
         ),
     ]
 
     outputs = [
         desc.File(
-            name='outputFolder',
-            label='outputFolder',
-            description='outputFolder',
-            value="{nodeCacheFolder}",
-        ),
-        desc.File(
-            name='bboxesFile',
-            label='Bounding Boxes File',
-            description='Generated json file containing the bounding boxes.',
+            name="bboxesFile",
+            label="Bounding Boxes File",
+            description="Generated JSON file containing the bounding boxes.",
             value="{nodeCacheFolder}/bboxes.json",
         ),
     ]
@@ -92,7 +83,7 @@ class MasksBboxes(desc.Node):
             paths.sort(key=lambda x: x[0])
 
         return paths
-    
+
     def extract_frame_number(self, filepath, extension="exr"):
         import re
 
@@ -112,7 +103,6 @@ class MasksBboxes(desc.Node):
         return int(match.group(1))
 
     def list_exr_files_sorted(self, folder, extension="exr"):
-        from pathlib import Path
         import sys
 
         folder = Path(folder)
@@ -197,7 +187,7 @@ class MasksBboxes(desc.Node):
                 raise ValueError(
                     f"alpha_only=True but image {filepath} has no alpha channel (RGB image)."
                 )
-            
+
         elif first_only:
             mask = arr[:, :, 0]
             bbox = self.get_bbox_from_mask(mask, threshold=threshold)
@@ -242,6 +232,3 @@ class MasksBboxes(desc.Node):
         }
         with open(chunk.node.bboxesFile.value, "w") as f:
             json.dump(result, f, indent=4, sort_keys=False)
-
-
-
