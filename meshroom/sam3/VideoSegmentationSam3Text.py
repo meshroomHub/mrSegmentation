@@ -249,7 +249,7 @@ cryptomatte from a text prompt.
 
         if node.combineFwdAndBwdSeg.value:
             track_dir = "both"
-            if frame_idx_to_text_prompt[-1] < frame_number - 1:
+            if frame_idx_to_text_prompt[-1] < frame_number - 1 or frame_number == 1:
                 frame_idx_to_text_prompt.append(frame_number - 1)
 
         return frame_idx_to_text_prompt, max_frame_num_to_track, track_dir
