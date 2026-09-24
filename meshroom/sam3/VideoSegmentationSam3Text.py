@@ -44,10 +44,17 @@ cryptomatte from a text prompt.
             value="${RDS_SAM3_MODEL_PATH}",
         ),
         desc.BoolParam(
+            name="firstFrameOnly",
+            label="Process First Frame Only",
+            description="Launch segmentation on first frame only. Do not propagate segmentation to the whole sequence.",
+            value=False,
+        ),
+        desc.BoolParam(
             name="combineFwdAndBwdSeg",
             label="Combine Forward and Backward Segmentation",
             description="Launch segmentation in both forward and backward directions and combine masks.",
             value=False,
+            enabled=lambda node: not node.firstFrameOnly.value,
         ),
         desc.BoolParam(
             name="timeSlicing",
@@ -55,12 +62,13 @@ cryptomatte from a text prompt.
                         "Propagation is forward only by default, or both forward and backward when 'Combine Forward \n"
                         "and Backward Segmentation' is enabled.",
             value=False,
+            enabled=lambda node: not node.firstFrameOnly.value,
         ),
         desc.IntParam(
             name="sliceSize",
             description="Number of frames on which the mask is propagated.",
             value=16,
-            enabled=lambda node: node.timeSlicing.value,
+            enabled=lambda node: node.timeSlicing.value and not node.firstFrameOnly.value,
         ),
         desc.BoolParam(
             name="enableBonding",
@@ -172,7 +180,7 @@ cryptomatte from a text prompt.
                         "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
-            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
+            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value and not node.firstFrameOnly.value,
         ),
         desc.File(
             name="colorMasksMergedFolder",
@@ -188,7 +196,7 @@ cryptomatte from a text prompt.
                         "Colors correspond to instance indexes.",
             semantic="image",
             value=None,
-            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value,
+            enabled=lambda node: node.outputColorMasks.value and node.combineFwdAndBwdSeg.value and not node.firstFrameOnly.value,
         ),
         desc.File(
             name="cryptomatteFolder",
@@ -240,14 +248,14 @@ cryptomatte from a text prompt.
         track_dir = "forward"
 
         # Construct frame sequence intervals if time slicing is active
-        if node.timeSlicing.value:
+        if node.timeSlicing.value and not node.firstFrameOnly.value:
             max_frame_num_to_track = node.sliceSize.value
             curr_frame_to_text_prompt = 0
             while curr_frame_to_text_prompt + node.sliceSize.value < frame_number:
                 curr_frame_to_text_prompt += node.sliceSize.value
                 frame_idx_to_text_prompt.append(curr_frame_to_text_prompt)
 
-        if node.combineFwdAndBwdSeg.value:
+        if node.combineFwdAndBwdSeg.value and not node.firstFrameOnly.value:
             track_dir = "both"
             if frame_idx_to_text_prompt[-1] < frame_number - 1 or frame_number == 1:
                 frame_idx_to_text_prompt.append(frame_number - 1)
@@ -320,6 +328,7 @@ cryptomatte from a text prompt.
         metadata_boxes = state["metadata_boxes"]
 
         is_definitive = (
+            node.firstFrameOnly.value or
             (node.combineFwdAndBwdSeg.value and direction_name == "merged") or
             (not node.combineFwdAndBwdSeg.value and direction_name == "forward")
         )
@@ -534,7 +543,10 @@ cryptomatte from a text prompt.
         image_paths = get_image_paths_list(input_path)
         if len(image_paths) == 0:
             raise FileNotFoundError(f"No image files found in {input_path}.")
-        self.image_paths = image_paths
+        if node.firstFrameOnly.value:
+            self.image_paths = [image_paths[0]]
+        else:
+            self.image_paths = image_paths
 
         # Parse and sanitize multi-line prompt lists
         self.text_prompts = re.split(r'[\n]+', node.prompt.value)
@@ -662,7 +674,7 @@ cryptomatte from a text prompt.
                         outputs_per_frame=outputs_per_frame,
                         track_states=track_states,
                         color_palette=color_palette,
-                        combine_fwd_bwd=chunk.node.combineFwdAndBwdSeg.value
+                        combine_fwd_bwd=chunk.node.combineFwdAndBwdSeg.value and not chunk.node.firstFrameOnly.value
                     )
 
                     # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
@@ -683,7 +695,7 @@ cryptomatte from a text prompt.
                         metadata_deep_model=metadata_deep_model
                     )
 
-                    if chunk.node.combineFwdAndBwdSeg.value:
+                    if chunk.node.combineFwdAndBwdSeg.value and not chunk.node.firstFrameOnly.value:
                         # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
                         first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
 
