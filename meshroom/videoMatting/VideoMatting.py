@@ -493,7 +493,7 @@ Matting node for video sequences.
             par = chunk_image_paths[0][8]
             first_frame_id = chunk_image_paths[0][2]
             exp_factor = chunk.node.boxExtensionFactor.value
-            bboxes = bboxUtils.extract_tracking_with_slices(json_path, frame_w, frame_h, batch_size, overlap, exp_factor, par, logger)
+            bboxes = bboxUtils.extract_tracking_with_slices(json_path, frame_w, frame_h, batch_size, overlap, exp_factor, par)
 
             metadata_boxes = {}
             for frame_id in range(len(chunk_image_paths)):
