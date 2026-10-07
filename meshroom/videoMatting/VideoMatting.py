@@ -391,8 +391,10 @@ Matting node for video sequences.
                 raise ValueError(f"Mask dims mismatch: {path} expected {(y2 - y1, x2 - x1)} got {roi.shape}")
 
             x1p, y1p, x2p, y2p = bboxUtils.box_to_source([x1, y1, x2, y2], par)
+            y1p = min(y1p, H)
+            y2p = min(y2p, H)
             if (y2p - y1p) != (y2 - y1):
-                get_y = (np.arange(y2p - y1p) + 0.5) * (1.0 / par)
+                get_y = (y1p + np.arange(y2p - y1p) + 0.5) * (1.0 / par) - y1
                 idxs_y = np.clip(get_y.astype(np.int32), 0, y2 - y1 - 1)
                 roi = roi[idxs_y]
 
