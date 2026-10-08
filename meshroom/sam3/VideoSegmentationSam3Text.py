@@ -326,13 +326,18 @@ cryptomatte from a text prompt.
 
         crypto_name = "cryptoObject" if text_prompt == "" else text_prompt.replace(" ", "_")
 
+        output_crypto = node.outputCryptomatte.value and is_definitive
+        par_is_one = source_info["shape"][0] == source_info["h_ori"]
+        if output_crypto and not par_is_one:
+            get_y = (np.arange(source_info["h_ori"]) + 0.5) * (1.0 / source_info["PAR"])
+            idxs_y = np.clip(get_y.astype(np.int32), 0, source_info["shape"][0] - 1)
+
         for frame_id in frame_range:
             color_mask_image = np.zeros(source_info["shape"], dtype=source_info["dtype"])
 
             if (first_frame_id + frame_id) not in boxes[text_prompt][direction_name]:
                 boxes[text_prompt][direction_name][first_frame_id + frame_id] = {}
 
-            output_crypto = node.outputCryptomatte.value and is_definitive
             if output_crypto:
                 crypto_id = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
                 crypto_cov = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
@@ -358,6 +363,10 @@ cryptomatte from a text prompt.
                     obj_name = f"{crypto_name}_{int(key)}"
                     f32_hash, hex_val, _ = image.hash_name(obj_name)
                     manifest[obj_name] = hex_val
+
+                    if not par_is_one:
+                        mask = mask[idxs_y]
+
                     crypto_id[mask] = f32_hash
                     crypto_cov[mask] = 1.0
 
@@ -410,11 +419,16 @@ cryptomatte from a text prompt.
             if output_crypto:
                 prefix = f"cryptomattes/cryptomatte_{text_prompt}_{dir_prefix}_"
                 cryptomatte_path = self._build_output_path(node, frame_id, prefix, ".exr")
+
+                if not par_is_one:
+                    color_mask_image = color_mask_image[idxs_y]
+                
                 image.writeCryptomatte(
                     cryptomatte_path,
                     crypto_name,
                     source_info["w_ori"],
                     source_info["h_ori"],
+                    source_info["PAR"],
                     manifest,
                     crypto_id,
                     crypto_cov,

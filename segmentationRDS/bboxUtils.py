@@ -330,7 +330,6 @@ def extract_tracking_with_slices(
     overlap       : int,
     exp_factor    : float = 1.0,
     par           : float = 1.0,
-    logger        = None,
 ) -> dict:
     """
     Extract bounding boxes per object and organize them in chunck and slices of consecutive frames.
@@ -384,10 +383,6 @@ def extract_tracking_with_slices(
 
             for c, chunk in enumerate(chunks):
                 for s, slice in enumerate(chunk.slices):
-                    logger.info(f"chunks[{c}].slices[{s}] = {slice}")
-
-            for c, chunk in enumerate(chunks):
-                for s, slice in enumerate(chunk.slices):
                     # --- compute target size ---
                     target_size_w, target_size_h = get_target_size(slice, par, False, False, exp_factor)
 
@@ -403,11 +398,6 @@ def extract_tracking_with_slices(
                     chunks[c].slices[s] = expanded_boxes
 
             result[key] = chunks
-
-        for key, chunks in result.items():
-            for c, chunk in enumerate(chunks):
-                for s, slice in enumerate(chunk.slices):
-                    logger.info(f"track[{key}].chunks[{c}].slices[{s}] = {slice}")
 
     return result
 

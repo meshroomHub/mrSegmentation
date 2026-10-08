@@ -347,7 +347,7 @@ Matting node for video sequences.
                                          mask_infos,
                                          out_path: str,
                                          crypto_layer_name: str,
-                                         H: int, W: int,
+                                         H: int, W: int, par: float,
                                          preview_rgb = None,
                                          eps: float = 1e-8,
                                          clamp01: bool = True,
@@ -357,7 +357,7 @@ Matting node for video sequences.
         objectName_objectId is unique per frame => one ROI per object.
         """
         import numpy as np
-        from segmentationRDS import image
+        from segmentationRDS import image, bboxUtils
 
         ids4 = np.zeros((H, W, 4), dtype=np.float32)
         cov4 = np.zeros((H, W, 4), dtype=np.float32)
@@ -390,13 +390,21 @@ Matting node for video sequences.
             if roi.shape != (y2 - y1, x2 - x1):
                 raise ValueError(f"Mask dims mismatch: {path} expected {(y2 - y1, x2 - x1)} got {roi.shape}")
 
+            x1p, y1p, x2p, y2p = bboxUtils.box_to_source([x1, y1, x2, y2], par)
+            y1p = min(y1p, H)
+            y2p = min(y2p, H)
+            if (y2p - y1p) != (y2 - y1):
+                get_y = (y1p + np.arange(y2p - y1p) + 0.5) * (1.0 / par) - y1
+                idxs_y = np.clip(get_y.astype(np.int32), 0, y2 - y1 - 1)
+                roi = roi[idxs_y]
+
             roi_cov = roi
             if clamp01:
                 roi_cov = np.clip(roi_cov, 0.0, 1.0)
 
             # update only the ROI window
-            ids_roi = ids4[y1:y2, x1:x2, :]
-            cov_roi = cov4[y1:y2, x1:x2, :]
+            ids_roi = ids4[y1p:y2p, x1p:x2p, :]
+            cov_roi = cov4[y1p:y2p, x1p:x2p, :]
 
             self._update_top4_inplace(ids_roi, cov_roi, roi_id, roi_cov.astype(np.float32, copy=False), eps=eps)
 
@@ -407,7 +415,12 @@ Matting node for video sequences.
             den = np.maximum(s, 1.0)  # s<1 => den=1, donc cov4 inchangé
             cov4 = (cov4 / den).astype(np.float32, copy=False)
 
-        image.writeCryptomatte(out_path, crypto_layer_name, W, H, manifest, ids4, cov4, preview_rgb)
+        if preview_rgb.shape[0] != H:
+            get_y = (np.arange(H) + 0.5) * (1.0 / par)
+            idxs_y = np.clip(get_y.astype(np.int32), 0, preview_rgb.shape[0] - 1)
+            preview_rgb = preview_rgb[idxs_y]
+
+        image.writeCryptomatte(out_path, crypto_layer_name, W, H, par, manifest, ids4, cov4, preview_rgb)
 
     def processChunk(self, chunk):
         from segmentationRDS import image, bboxUtils, videoMattingUtils
@@ -482,7 +495,7 @@ Matting node for video sequences.
             par = chunk_image_paths[0][8]
             first_frame_id = chunk_image_paths[0][2]
             exp_factor = chunk.node.boxExtensionFactor.value
-            bboxes = bboxUtils.extract_tracking_with_slices(json_path, frame_w, frame_h, batch_size, overlap, exp_factor, par, logger)
+            bboxes = bboxUtils.extract_tracking_with_slices(json_path, frame_w, frame_h, batch_size, overlap, exp_factor, par)
 
             metadata_boxes = {}
             for frame_id in range(len(chunk_image_paths)):
@@ -682,7 +695,7 @@ Matting node for video sequences.
                                                         masks_infos,
                                                         image_path[5],
                                                         "cryptoObject",
-                                                        source_info["h_ori"], source_info["w_ori"],
+                                                        source_info["h_ori"], source_info["w_ori"], source_info["PAR"],
                                                         alpha)
 
         finally:

@@ -135,7 +135,7 @@ def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = T
 
     if pixelAspectRatio != 1.0 and applyPAR:
         oiio_image_buf = oiio.ImageBuf(oiio_image)
-        nh = int(float(h) / pixelAspectRatio)
+        nh = int(round(float(h) / pixelAspectRatio))
         oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w, 0, nh, 0, 1, 0, c+1))
         oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
 
@@ -243,7 +243,7 @@ def hash_name(name):
     f32_hex = hex(struct.unpack('<I', struct.pack('<f', f32_val))[0])[2:]
     return f32_val, f32_hex, hash_32
 
-def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_cov, preview = None):
+def writeCryptomatte(filepath, crypto_name, w, h, par, manifest, crypto_id, crypto_cov, preview = None):
     import OpenImageIO as oiio
     import json
     import numpy as np
@@ -259,6 +259,7 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
         spec_beauty.attribute("compression", "dwaa")
         spec_beauty.attribute("oiio:subimagename", "rgba")
         spec_beauty.attribute("dwaCompressionLevel", 45)
+        spec_beauty.attribute("PixelAspectRatio", par)
 
     ch += [f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue",  f"{crypto_name}00.alpha"]
 
@@ -270,6 +271,7 @@ def writeCryptomatte(filepath, crypto_name, w, h, manifest, crypto_id, crypto_co
     spec_crypto.channelnames = ch
     spec_crypto.attribute("compression", "zip")
     spec_crypto.attribute("oiio:subimagename", "crypto_object")
+    spec_crypto.attribute("PixelAspectRatio", par)
 
     _, _, h32 = hash_name(crypto_name)
     crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
