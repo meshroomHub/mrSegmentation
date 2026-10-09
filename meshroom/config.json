@@ -28,5 +28,10 @@
         "key": "TRANSFORMERS_OFFLINE",
         "type": "string",
         "value": "TRUE"
+    },
+    {
+        "key": "RDS_SAM3_MODEL_PATH",
+        "type": "path",
+        "value": "../models/sam3.pt"
     }
 ]
