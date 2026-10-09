@@ -181,7 +181,8 @@ positive bounding boxes and "neg" for the negative ones.
         from pyalicevision import sfmDataIO
 
         paths = {}
-        if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
+        from segmentationRDS.sfmData import isSfmDataFile
+        if isSfmDataFile(input_path):
             if Path(input_path).exists():
                 dataAV = sfmData.SfMData()
                 if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL) and os.path.isdir(outDir):
@@ -289,6 +290,7 @@ positive bounding boxes and "neg" for the negative ones.
         import json
         import re
         from segmentationRDS import image
+        from segmentationRDS.sfmData import SFMDATA_EXTENSIONS
         from sam3.model_builder import build_sam3_image_model
         from sam3.model.sam3_image_processor import Sam3Processor
         import numpy as np
@@ -309,11 +311,15 @@ positive bounding boxes and "neg" for the negative ones.
 
             chunk.logger.info("Chunk range from {} to {}".format(chunk.range.start, chunk.range.last))
 
-            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value,
-                                          chunk.node.keepFilename.value, chunk.node.extensionOut.value)
-
+            # the output folder must exist before resolving the views (resolvedPaths returns nothing otherwise)
             if not os.path.exists(chunk.node.output.value):
                 os.mkdir(chunk.node.output.value)
+
+            outFiles = self.resolvedPaths(chunk.node.input.value, chunk.node.output.value,
+                                          chunk.node.keepFilename.value, chunk.node.extensionOut.value)
+            if not outFiles:
+                raise RuntimeError("No view to segment in the input '{}': it must be an SfMData file readable by "
+                                   "AliceVision ({}).".format(chunk.node.input.value, ", ".join(SFMDATA_EXTENSIONS)))
 
             device = "cuda" if torch.cuda.is_available() else "cpu"
             # SAM3 weights are bfloat16: inference must run under autocast (+ inference_mode),

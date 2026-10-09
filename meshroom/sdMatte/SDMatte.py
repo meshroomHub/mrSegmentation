@@ -144,7 +144,8 @@ Only one type of driving prompt must be provided for a given image.
 
         paths = {}
         inputFileMask = None
-        if Path(pathIn).suffix.lower() in [".sfm", ".abc"]:
+        from segmentationRDS.sfmData import isSfmDataFile
+        if isSfmDataFile(pathIn):
             if Path(pathIn).exists():
                 dataAV = sfmData.SfMData()
                 if sfmDataIO.load(dataAV, pathIn, sfmDataIO.ALL) and os.path.isdir(outDir):
