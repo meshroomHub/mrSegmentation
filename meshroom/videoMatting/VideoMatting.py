@@ -171,7 +171,8 @@ Matting node for video sequences.
             raise FileNotFoundError(f"Input path '{input_path}' does not exist.")
         if not Path(mask_path).exists():
             raise FileNotFoundError(f"Input path for masks '{mask_path}' does not exist.")
-        if Path(input_path).suffix.lower() not in [".sfm", ".abc"]:
+        from segmentationRDS.sfmData import isSfmDataFile
+        if not isSfmDataFile(input_path):
             raise ValueError(f"Input path '{input_path}' is not a valid sfmData file.")
 
         av_data = sfmData.SfMData()
