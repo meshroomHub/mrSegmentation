@@ -287,6 +287,7 @@ positive bounding boxes and "neg" for the negative ones.
         return bboxDictFromShape
 
     def processChunk(self, chunk):
+        import contextlib
         import json
         import re
         from segmentationRDS import image
@@ -298,6 +299,7 @@ positive bounding boxes and "neg" for the negative ones.
         from pyalicevision import image as avimg
 
         processor = None
+        inferenceContexts = contextlib.ExitStack()
         try:
             chunk.logManager.start(chunk.node.verboseLevel.value)
 
@@ -325,8 +327,8 @@ positive bounding boxes and "neg" for the negative ones.
             # SAM3 weights are bfloat16: inference must run under autocast (+ inference_mode),
             # otherwise a "BFloat16 vs Float" dtype mismatch is raised. See official examples.
             if device == "cuda":
-                torch.autocast("cuda", dtype=torch.bfloat16).__enter__()
-            torch.inference_mode().__enter__()
+                inferenceContexts.enter_context(torch.autocast("cuda", dtype=torch.bfloat16))
+            inferenceContexts.enter_context(torch.inference_mode())
             model = build_sam3_image_model(checkpoint_path=chunk.node.segmentationModelPath.evalValue, device=device)
             processor = Sam3Processor(model)
 
@@ -420,5 +422,6 @@ positive bounding boxes and "neg" for the negative ones.
 
         finally:
             del processor
+            inferenceContexts.close()
             torch.cuda.empty_cache()
             chunk.logManager.end()
