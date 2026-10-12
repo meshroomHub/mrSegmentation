@@ -39,7 +39,7 @@ Available Models:
 
 Known Limitations:
 ------------------
-- Requires a SfMData file (.sfm or .abc) as input.
+- Requires a SfMData file (.sfm, .abc, .usd/.usda/.usdc, .json) as input.
 - Either a mask or a trimap must be provided, but not both simultaneously.
 - If no trimap transition region (value 0.5) is found in a bounding box,
   processing stops with an error for that frame.
@@ -182,7 +182,8 @@ Known Limitations:
 
         paths = {}
         inputFileMask = None
-        if Path(pathIn).suffix.lower() in [".sfm", ".abc"]:
+        from segmentationRDS.sfmData import isSfmDataFile
+        if isSfmDataFile(pathIn):
             if Path(pathIn).exists():
                 dataAV = sfmData.SfMData()
                 if sfmDataIO.load(dataAV, pathIn, sfmDataIO.ALL) and os.path.isdir(outDir):

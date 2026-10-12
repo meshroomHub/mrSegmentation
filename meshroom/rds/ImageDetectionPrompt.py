@@ -142,7 +142,8 @@ Bounded box sizes can be increased by a ratio from 0 to 100%.
         from pathlib import Path
 
         paths = {}
-        if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
+        from segmentationRDS.sfmData import isSfmDataFile
+        if isSfmDataFile(input_path):
             if Path(input_path).exists():
                 dataAV = sfmData.SfMData()
                 if sfmDataIO.load(dataAV, input_path, sfmDataIO.ALL) and os.path.isdir(outDir):

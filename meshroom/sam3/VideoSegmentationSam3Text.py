@@ -772,7 +772,8 @@ def get_image_paths_list(input_path):
 
     image_paths = []
 
-    if Path(input_path).suffix.lower() in [".sfm", ".abc"]:
+    from segmentationRDS.sfmData import isSfmDataFile
+    if isSfmDataFile(input_path):
         if Path(input_path).exists():
             data = sfmData.SfMData()
             if sfmDataIO.load(data, input_path, sfmDataIO.ALL):
