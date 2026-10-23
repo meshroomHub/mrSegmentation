@@ -224,10 +224,10 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
                     main_color_masks_path = new_color_masks_path
                 else:
                     main_color_masks_path = os.path.join(src, f"colorMask_{prompts[0]}_{mask_type}_{frame_filename}")
-                main_color_mask, _, _, nc = load_exr_raw(main_color_masks_path)
+                main_color_mask, _, _, nc, par = load_exr_raw(main_color_masks_path)
                 second_mask_filename = f"colorMask_{second_prompt}_{mask_type}_{frame_filename}"
                 second_color_masks_path = os.path.join(src, second_mask_filename)
-                second_color_mask, _, _, _ = load_exr_raw(second_color_masks_path)
+                second_color_mask, _, _, _, _ = load_exr_raw(second_color_masks_path)
 
                 for main_id, (main_color, second_colors) in merges_by_frame[fid].items():
                     # The main item is bonded at once with all its secondary items
@@ -244,7 +244,7 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
                     paint_mask(main_color_mask, bounded_mask, main_color)
                     bboxes_manager.update_from_mask(fid, main_id, (bounded_mask > 0.5).astype(np.uint8) * 255)
 
-                save_exr(new_color_masks_path, main_color_mask, nc)
+                save_exr(new_color_masks_path, main_color_mask, nc, par)
                 written_paths.add(new_color_masks_path)
 
         if merge_instances:
@@ -261,7 +261,7 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
                     main_color_masks_path = new_color_masks_path
                 else:
                     main_color_masks_path = os.path.join(src, f"colorMask_{prompts[0]}_{mask_type}_{frame_filename}")
-                main_color_mask, _, _, nc = load_exr_raw(main_color_masks_path)
+                main_color_mask, _, _, nc, par = load_exr_raw(main_color_masks_path)
 
                 color_palette.generate_palette(max(int(obj_id) for obj_id in obj_ids) + 1)
                 masks = [
@@ -282,7 +282,7 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
 
                 instance_color = np.array(color_palette.at(0), dtype=np.float32) / 255.0
                 paint_mask(main_color_mask, bounded_mask, instance_color, keep_other_colors=False)
-                save_exr(new_color_masks_path, main_color_mask, nc)
+                save_exr(new_color_masks_path, main_color_mask, nc, par)
                 written_paths.add(new_color_masks_path)
                 bboxes_manager.replace_frame_with_mask(int(fid), 0, (bounded_mask > 0.5).astype(np.uint8) * 255)
 
@@ -356,6 +356,7 @@ def load_exr_raw(filepath):
     width = spec.width
     height = spec.height
     nchannels = spec.nchannels
+    par = spec.get_float_attribute("PixelAspectRatio", 1.0)
 
     pixels = inp.read_image()
     inp.close()
@@ -364,7 +365,7 @@ def load_exr_raw(filepath):
         raise IOError(f"Unable to read the pixels of {filepath}")
 
     arr = np.array(pixels, dtype=np.float32).reshape(height, width, nchannels)
-    return arr, width, height, nchannels
+    return arr, width, height, nchannels, par
 
 def compute_color_mask_alpha(color, mask_raw):
     """
@@ -401,7 +402,7 @@ def paint_mask(mask_raw, mask, target, keep_other_colors=True):
     mask_raw[new_zone, 1] = target[1]
     mask_raw[new_zone, 2] = target[2]
 
-def save_exr(filepath, arr, nchannels):
+def save_exr(filepath, arr, nchannels, par):
     """Save a float (H,W,C) array as EXR using OpenImageIO"""
     import OpenImageIO as oiio
 
@@ -411,6 +412,7 @@ def save_exr(filepath, arr, nchannels):
         raise IOError(f"Unable to create the output file {filepath}: {oiio.geterror()}")
 
     spec = oiio.ImageSpec(w, h, nchannels, oiio.FLOAT)
+    spec.attribute("PixelAspectRatio", float(par))
     out.open(filepath, spec)
     out.write_image(arr)
     out.close()
