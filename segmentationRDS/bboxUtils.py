@@ -484,3 +484,111 @@ def tile_chunk(chunk: TrackChunk, targetTileSize: int, min_overlap: int, max_til
     return chunk_tiles
 
 
+def get_bbox_center(bbox):
+    """Compute center (x, y) of a bbox (x1, y1, x2, y2)."""
+    return ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
+
+def compute_iob(box_1, box_2):
+    """Proportion of box_1 included in box_2."""
+    x1_i = max(box_1[0], box_2[0])
+    y1_i = max(box_1[1], box_2[1])
+    x2_i = min(box_1[2], box_2[2])
+    y2_i = min(box_1[3], box_2[3])
+    if x1_i >= x2_i or y1_i >= y2_i: return 0.0
+    intersection_area = (x2_i - x1_i) * (y2_i - y1_i)
+    box_1_area = (box_1[2] - box_1[0]) * (box_1[3] - box_1[1])
+    return intersection_area / (box_1_area + 1e-6)
+
+def associate_items(data, item1:str, item2:str, min_iob_threshold:float=0.1, motion_weight:float=2.0,
+                     min_score:float=0.0):
+    """
+    Associate each object of item1 (secondary prompt) to at most one object of item2 (primary prompt).
+    data: {item1: {frame: {obj_id: [x1, y1, x2, y2]}}, item2: {frame: {obj_id: [x1, y1, x2, y2]}}}
+    For each pair of objects co-existing in a frame, a score combining the inclusion of the item1 bbox
+    in the item2 bbox (iob) and the similarity of their motions is accumulated over the sequence, then
+    averaged on the total number of frames, so that the association duration is taken into account.
+    Each item1 object is then attributed to the item2 object with the highest score, if this score reaches
+    min_score. Several item1 objects can be attributed to the same item2 object.
+    Return {item1_obj_id: {"item2_id": item2_obj_id, "confidence_score": normalized score in [0, 1]}}
+    """
+    import numpy as np
+    from collections import defaultdict
+
+    traj_item1 = defaultdict(dict) # secondary
+    traj_item2 = defaultdict(dict) # primary
+    
+    for frame, item1s in data[item1].items():
+        for b_id, bbox in item1s.items():
+            traj_item1[b_id][frame] = get_bbox_center(bbox)
+            
+    for frame, item2s in data[item2].items():
+        for p_id, bbox in item2s.items():
+            traj_item2[p_id][frame] = get_bbox_center(bbox)
+
+    scoring_pool = defaultdict(lambda: defaultdict(float))
+    frame_counters = defaultdict(lambda: defaultdict(int))
+    
+    all_frames = sorted(set(data[item1].keys()).union(data[item2].keys()), key=int)
+
+    # 1. Computation and accumulation
+    for idx, frame in enumerate(all_frames[:-1]):
+        next_frame = all_frames[idx + 1]
+        
+        frame_item1s = data[item1].get(frame, {})
+        frame_item2s = data[item2].get(frame, {})
+        
+        for b_id, b_bbox in frame_item1s.items():
+            for p_id, p_bbox in frame_item2s.items():
+                
+                iob_score = compute_iob(b_bbox, p_bbox)
+                if iob_score < min_iob_threshold:
+                    continue  
+                
+                motion_score = 1.0  
+                if (frame in traj_item1[b_id] and next_frame in traj_item1[b_id] and
+                    frame in traj_item2[p_id] and next_frame in traj_item2[p_id]):
+                    
+                    v_item1 = np.array(traj_item1[b_id][next_frame]) - np.array(traj_item1[b_id][frame])
+                    v_item2 = np.array(traj_item2[p_id][next_frame]) - np.array(traj_item2[p_id][frame])
+                    velocity_diff = np.linalg.norm(v_item1 - v_item2)
+                    motion_score = np.exp(-velocity_diff / 10.0)
+                
+                combined_score = iob_score + (motion_weight * motion_score)
+                
+                scoring_pool[b_id][p_id] += combined_score
+                frame_counters[b_id][p_id] += 1  # Co-existent frame number accumulation
+
+    # 2. Normalisation
+    all_combinations = []
+    max_score_per_frame = 1.0 + motion_weight 
+
+    for b_id, item2_scores in scoring_pool.items():
+        for p_id, total_accumulated_score in item2_scores.items():
+
+            # A. Average score per frame on the full sequence to take into account the association duration
+            mean_score = total_accumulated_score / len(all_frames)
+            
+            # B. Normalisation
+            normalized_score = mean_score / max_score_per_frame
+            
+            all_combinations.append({
+                'item1_id': b_id, 
+                'item2_id': p_id, 
+                'score': normalized_score
+            })
+            
+    # 3. Sorting
+    all_combinations.sort(key=lambda x: x['score'], reverse=True)
+
+    # 4. Greedy algorithm (each item1 attributed once, an item2 can receive several item1s)
+    final_associations = {}
+
+    for combo in all_combinations:
+        b_id = combo['item1_id']
+        p_id = combo['item2_id']
+        
+        # Combos being sorted, the first one met for an item1 is its best one
+        if b_id not in final_associations and combo['score'] >= min_score:
+            final_associations[b_id] = {"item2_id": p_id, "confidence_score": round(combo['score'], 3)}
+            
+    return final_associations
