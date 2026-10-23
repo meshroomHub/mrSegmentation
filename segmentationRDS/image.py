@@ -244,13 +244,20 @@ def hash_name(name):
     return f32_val, f32_hex, hash_32
 
 def writeCryptomatte(filepath, crypto_name, w, h, par, manifest, crypto_id, crypto_cov, preview = None):
+    writeCryptomatteLayers(filepath, w, h, par, [(crypto_name, manifest, crypto_id, crypto_cov)], preview)
+
+def writeCryptomatteLayers(filepath, w, h, par, layers, preview = None):
+    """
+    Write an EXR containing one or several cryptomatte layers.
+    layers: list of (crypto_name, manifest, crypto_id, crypto_cov) tuples, where crypto_id and crypto_cov
+    are either (H,W) arrays (single rank) or (H,W,4) arrays (top-4 ranks).
+    """
     import OpenImageIO as oiio
     import json
     import numpy as np
 
     preview = None if preview is None else np.asarray(preview)
     has_preview = preview is not None
-    single_layer = crypto_id.ndim == 2 and crypto_cov.ndim == 2
 
     ch = []
     if has_preview:
@@ -261,10 +268,11 @@ def writeCryptomatte(filepath, crypto_name, w, h, par, manifest, crypto_id, cryp
         spec_beauty.attribute("dwaCompressionLevel", 45)
         spec_beauty.attribute("PixelAspectRatio", par)
 
-    ch += [f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue",  f"{crypto_name}00.alpha"]
+    for crypto_name, _, crypto_id, crypto_cov in layers:
+        ch += [f"{crypto_name}00.red", f"{crypto_name}00.green", f"{crypto_name}00.blue",  f"{crypto_name}00.alpha"]
 
-    if not single_layer:
-        ch += [f"{crypto_name}01.red", f"{crypto_name}01.green", f"{crypto_name}01.blue",  f"{crypto_name}01.alpha"]
+        if not (crypto_id.ndim == 2 and crypto_cov.ndim == 2):
+            ch += [f"{crypto_name}01.red", f"{crypto_name}01.green", f"{crypto_name}01.blue",  f"{crypto_name}01.alpha"]
 
     nchan_crypto = len(ch)
     spec_crypto = oiio.ImageSpec(w, h, nchan_crypto, oiio.FLOAT)
@@ -273,20 +281,16 @@ def writeCryptomatte(filepath, crypto_name, w, h, par, manifest, crypto_id, cryp
     spec_crypto.attribute("oiio:subimagename", "crypto_object")
     spec_crypto.attribute("PixelAspectRatio", par)
 
-    _, _, h32 = hash_name(crypto_name)
-    crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
-    spec_crypto.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
-    spec_crypto.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
-    spec_crypto.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
-    spec_crypto.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
-    spec_crypto.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
-
-    if has_preview:
-        spec_beauty.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
-        spec_beauty.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
-        spec_beauty.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
-        spec_beauty.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
-        spec_beauty.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
+    specs = [spec_crypto, spec_beauty] if has_preview else [spec_crypto]
+    for crypto_name, manifest, _, _ in layers:
+        _, _, h32 = hash_name(crypto_name)
+        crypto_key = f"{h32 & 0xFFFFFFFF:08x}"[:7]
+        for spec in specs:
+            spec.attribute(f"cryptomatte/{crypto_key}/name", crypto_name)
+            spec.attribute(f"cryptomatte/{crypto_key}/manifest", json.dumps(manifest, separators=(",", ":")))
+            spec.attribute(f"cryptomatte/{crypto_key}/hash", "MurmurHash3_32")
+            spec.attribute(f"cryptomatte/{crypto_key}/conversion", "uint32_to_float32")
+            spec.attribute(f"cryptomatte/{crypto_key}/version", "1.0")
 
     zeros = np.zeros((h, w), dtype=np.float32)
 
@@ -308,16 +312,17 @@ def writeCryptomatte(filepath, crypto_name, w, h, par, manifest, crypto_id, cryp
             raise ValueError(f"Unsupported channel count in preview: {c} (expected 3 or 4)")
         preview_data = oiio.ImageBuf(np.ascontiguousarray(preview_rgba, dtype=np.float32))
 
-    if not single_layer:
-        id0, id1, id2, id3 = (crypto_id[..., 0], crypto_id[..., 1], crypto_id[..., 2], crypto_id[..., 3])
-        c0,  c1,  c2,  c3  = (crypto_cov[..., 0], crypto_cov[..., 1], crypto_cov[..., 2], crypto_cov[..., 3])
-        crypto00 = np.dstack((id0, c0, id1, c1))
-        crypto01 = np.dstack((id2, c2, id3, c3))
-        parts.append(crypto00)
-        parts.append(crypto01)
-    else:
-        crypto00 = np.dstack((crypto_id.astype(np.float32), crypto_cov.astype(np.float32), zeros, zeros))
-        parts.append(crypto00)
+    for _, _, crypto_id, crypto_cov in layers:
+        if not (crypto_id.ndim == 2 and crypto_cov.ndim == 2):
+            id0, id1, id2, id3 = (crypto_id[..., 0], crypto_id[..., 1], crypto_id[..., 2], crypto_id[..., 3])
+            c0,  c1,  c2,  c3  = (crypto_cov[..., 0], crypto_cov[..., 1], crypto_cov[..., 2], crypto_cov[..., 3])
+            crypto00 = np.dstack((id0, c0, id1, c1))
+            crypto01 = np.dstack((id2, c2, id3, c3))
+            parts.append(crypto00)
+            parts.append(crypto01)
+        else:
+            crypto00 = np.dstack((crypto_id.astype(np.float32), crypto_cov.astype(np.float32), zeros, zeros))
+            parts.append(crypto00)
 
     crypto_data = np.dstack(parts).astype(np.float32, copy=False)
     crypto_data_buf = oiio.ImageBuf(spec_crypto)

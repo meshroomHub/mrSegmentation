@@ -3,6 +3,7 @@ __version__ = "1.5"
 import logging
 import os
 from pathlib import Path
+from typing import Optional
 
 from pyalicevision import parallelization as avpar
 from meshroom.core import desc
@@ -106,6 +107,13 @@ Matting node for video sequences.
             name="outputCryptomatte",
             description="Generate exr images containing cryptomatte to encode the matting results.",
             value=False,
+        ),
+        desc.BoolParam(
+            name="separateMergedCryptoLayer",
+            label="Separate Merged Crypto Layer",
+            description="Store the mattes of the merged prompts (ending with '-Full') in a dedicated cryptomatte layer 'cryptoObjectFull'.",
+            value=False,
+            enabled=lambda node: node.outputCryptomatte.value,
         ),
         desc.BoolParam(
             name="keepFilename",
@@ -352,17 +360,21 @@ Matting node for video sequences.
                                          preview_rgb = None,
                                          eps: float = 1e-8,
                                          clamp01: bool = True,
-                                         normalize_if_sum_gt_1: bool = True):
+                                         normalize_if_sum_gt_1: bool = True,
+                                         merged_layer_name: Optional[str] = None):
         """
         Builds top-4 cryptomatte buffers (H,W,4) by reading ROIs for the given frame.
         objectName_objectId is unique per frame => one ROI per object.
+        If merged_layer_name is set, the ROIs of the merged prompts (ending with '-Full') are stored in this layer.
         """
         import numpy as np
         from segmentationRDS import image, bboxUtils
 
-        ids4 = np.zeros((H, W, 4), dtype=np.float32)
-        cov4 = np.zeros((H, W, 4), dtype=np.float32)
-        manifest: dict[str, str] = {}
+        layer_names = [crypto_layer_name] + ([merged_layer_name] if merged_layer_name else [])
+        layers = {name: {"ids4": np.zeros((H, W, 4), dtype=np.float32),
+                         "cov4": np.zeros((H, W, 4), dtype=np.float32),
+                         "manifest": {}}
+                  for name in layer_names}
 
         for mi in mask_infos:
             if mi["frame"] != frame:
@@ -377,6 +389,7 @@ Matting node for video sequences.
             path = mi["path"]
 
             key = f"{obj_name}_{obj_id}"
+            layer = layers[merged_layer_name if merged_layer_name and obj_name.endswith("-Full") else crypto_layer_name]
 
             # bounds check (0-based, exclusive upper bounds)
             if not (0 <= x1 < x2 <= W and 0 <= y1 < y2 <= H):
@@ -385,7 +398,7 @@ Matting node for video sequences.
             # id + manifest
             f32_hash, hex_val, _ = image.hash_name(key)
             roi_id = np.float32(f32_hash)
-            manifest[key] = hex_val
+            layer["manifest"][key] = hex_val
 
             roi = self._read_exr_first_channel(str(path))
             if roi.shape != (y2 - y1, x2 - x1):
@@ -404,24 +417,28 @@ Matting node for video sequences.
                 roi_cov = np.clip(roi_cov, 0.0, 1.0)
 
             # update only the ROI window
-            ids_roi = ids4[y1p:y2p, x1p:x2p, :]
-            cov_roi = cov4[y1p:y2p, x1p:x2p, :]
+            ids_roi = layer["ids4"][y1p:y2p, x1p:x2p, :]
+            cov_roi = layer["cov4"][y1p:y2p, x1p:x2p, :]
 
             self._update_top4_inplace(ids_roi, cov_roi, roi_id, roi_cov.astype(np.float32, copy=False), eps=eps)
 
             os.remove(path)
 
         if normalize_if_sum_gt_1:
-            s = cov4.sum(axis=2, keepdims=True)
-            den = np.maximum(s, 1.0)  # s<1 => den=1, donc cov4 inchangé
-            cov4 = (cov4 / den).astype(np.float32, copy=False)
+            # Layers are independent: each one is normalized separately
+            for layer in layers.values():
+                s = layer["cov4"].sum(axis=2, keepdims=True)
+                den = np.maximum(s, 1.0)  # s<1 => den=1, donc cov4 inchangé
+                layer["cov4"] = (layer["cov4"] / den).astype(np.float32, copy=False)
 
         if preview_rgb.shape[0] != H:
             get_y = (np.arange(H) + 0.5) * (1.0 / par)
             idxs_y = np.clip(get_y.astype(np.int32), 0, preview_rgb.shape[0] - 1)
             preview_rgb = preview_rgb[idxs_y]
 
-        image.writeCryptomatte(out_path, crypto_layer_name, W, H, par, manifest, ids4, cov4, preview_rgb)
+        image.writeCryptomatteLayers(out_path, W, H, par,
+                                     [(name, layer["manifest"], layer["ids4"], layer["cov4"]) for name, layer in layers.items()],
+                                     preview_rgb)
 
     def processChunk(self, chunk):
         from segmentationRDS import image, bboxUtils, videoMattingUtils
@@ -505,6 +522,9 @@ Matting node for video sequences.
             logger.debug(f"bboxes.keys() = {bboxes.keys()}")
             prompts = [key.rsplit('_', 1)[0] for key in bboxes.keys()]
             metadata_deep_model_base["Meshroom:mrSegmentation:Prompt"] = ";".join(list(dict.fromkeys(prompts)))
+            if chunk.node.outputCryptomatte.value and chunk.node.separateMergedCryptoLayer.value \
+                    and not any(prompt.endswith("-Full") for prompt in prompts):
+                logger.warning("No merged prompt (ending with '-Full') found: the cryptomatte layer 'cryptoObjectFull' will be empty.")
 
             full_alpha = {}
             masks_by_frame = {}
@@ -697,7 +717,8 @@ Matting node for video sequences.
                                                         image_path[5],
                                                         "cryptoObject",
                                                         source_info["h_ori"], source_info["w_ori"], source_info["PAR"],
-                                                        alpha)
+                                                        alpha,
+                                                        merged_layer_name="cryptoObjectFull" if chunk.node.separateMergedCryptoLayer.value else None)
 
         finally:
             torch.cuda.empty_cache()
