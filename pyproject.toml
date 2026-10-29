@@ -11,6 +11,9 @@ dependencies = [
     "ram",
     "groundingdino-py==0.4.0",
     "segment-anything==1.0",
+    # ram and groundingdino-py use the transformers 4 API (e.g. modeling_utils.apply_chunking_to_forward,
+    # removed in 4.56), and transformers 5 requires PyTorch >= 2.6.
+    "transformers>=4.25.1,<4.56",
     "birefnet",
     "scipy",  # needed for ram
     "fairscale",  # needed for ram
