@@ -1,0 +1,121 @@
+[project]
+name = "mrSegmentation"
+version = "1.6.0"
+description = "Segmentation and matting nodes for Meshroom."
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MPL-2.0"}
+dependencies = [
+    "torch==2.5.1",
+    "torchvision==0.20.*",
+    "ram",
+    "groundingdino-py==0.4.0",
+    "segment-anything==1.0",
+    "birefnet",
+    "scipy",  # needed for ram
+    "fairscale",  # needed for ram
+    "einops",  # needed for birefnet
+    "kornia",  # needed for birefnet
+    "sam3",
+    "setuptools<81",  # sam3 imports pkg_resources, removed from setuptools 81
+    "psutil",  # needed for sam3
+]
+
+# Meshroom discovers the nodes from the plugin folder, not site-packages.
+# uv only installs the plugin's dependencies into its venv.
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu124" }
+torchvision = { index = "pytorch-cu124" }
+ram = { git = "https://github.com/xinyu1205/recognize-anything.git", rev = "7cb804a8609e9f4b1a50b7f31436d2df40bb9481" }
+birefnet = { git = "https://github.com/meshroomHubWarehouse/BiRefNet.git", rev = "c93a617f2b81088d740c173dd2eb3690b7cdced6" }
+sam3 = { git = "https://github.com/facebookresearch/sam3.git", rev = "7f473cfd983d5eb43040ff608f66bff0d7bdcb53" }
+
+[[tool.uv.index]]
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
+explicit = true
+
+[tool.meshroom]
+publisher = "meshroomHub"
+requirements = "Nvidia GPU with CUDA >= 12.4. AliceVision Python bindings with pyalicevision.parallelization (AliceVision develop from 2026.02). SAM 3 nodes: the gated facebook/sam3 checkpoint, set with RDS_SAM3_MODEL_PATH (see INSTALL.md)."
+# Paths are relative to the plugin root, where the assets below are downloaded.
+# An environment variable of the same name overrides them.
+env = [
+    { key = "RDS_RECOGNITION_MODEL_PATH", type = "path", value = "models/ram_plus_swin_large_14m.pth" },
+    { key = "RDS_DETECTION_CONFIG_PATH", type = "path", value = "models/GroundingDINO_SwinT_OGC.py" },
+    { key = "RDS_DETECTION_MODEL_PATH", type = "path", value = "models/groundingdino_swint_ogc.pth" },
+    { key = "RDS_SEGMENTATION_MODEL_PATH", type = "path", value = "models/sam_vit_h_4b8939.pth" },
+    { key = "RDS_TOKENIZER_PATH", type = "path", value = "models/tokenizer" },
+    { key = "TRANSFORMERS_OFFLINE", type = "string", value = "TRUE" },
+]
+
+# Models of https://gitlab.com/alicevision/imagepromptnnmodels, pinned on a commit.
+[[tool.meshroom.assets]]
+name = "RAM_plus_weights"
+category = "Weights"
+path = "models/ram_plus_swin_large_14m.pth"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/ram_plus_swin_large_14m.pth"
+sha256 = "497c178836ba66698ca226c7895317e6e800034be986452dbd2593298d50e87d"
+sizeMB = 2871
+
+[[tool.meshroom.assets]]
+name = "GroundingDINO_config"
+category = "Configuration"
+path = "models/GroundingDINO_SwinT_OGC.py"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/GroundingDINO_SwinT_OGC.py"
+sha256 = "b978763965dc4b2c3fe428b89b69e293d38d45a8d3890dd35dcabcd61c2433a1"
+
+[[tool.meshroom.assets]]
+name = "GroundingDINO_weights"
+category = "Weights"
+path = "models/groundingdino_swint_ogc.pth"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/groundingdino_swint_ogc.pth"
+sha256 = "3b3ca2563c77c69f651d7bd133e97139c186df06231157a64c507099c52bc799"
+sizeMB = 662
+
+[[tool.meshroom.assets]]
+name = "SAM_ViT-H_weights"
+category = "Weights"
+path = "models/sam_vit_h_4b8939.pth"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/sam_vit_h_4b8939.pth"
+sha256 = "a7bf3b02f3ebf1267aba913ff637d9a2d5c33d3173bb679e46d9f338c26f262e"
+sizeMB = 2446
+
+[[tool.meshroom.assets]]
+name = "GroundingDINO_text_encoder_config"
+category = "Tokenizer"
+path = "models/tokenizer/config.json"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/tokenizer/config.json"
+sha256 = "7160e1553ad2ca51d8c1cb066be533db31826e12d173824c1bb0cb1a4f187d20"
+
+[[tool.meshroom.assets]]
+name = "GroundingDINO_text_encoder_weights"
+category = "Tokenizer"
+path = "models/tokenizer/model.safetensors"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/tokenizer/model.safetensors"
+sha256 = "68d45e234eb4a928074dfd868cead0219ab85354cc53d20e772753c6bb9169d3"
+sizeMB = 421
+
+[[tool.meshroom.assets]]
+name = "GroundingDINO_tokenizer"
+category = "Tokenizer"
+path = "models/tokenizer/tokenizer.json"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/tokenizer/tokenizer.json"
+sha256 = "ce64fce797c24f68df90b40a3f74f579b336a493db14bd583fd520ea0d8c9a98"
+
+[[tool.meshroom.assets]]
+name = "GroundingDINO_tokenizer_config"
+category = "Tokenizer"
+path = "models/tokenizer/tokenizer_config.json"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/tokenizer/tokenizer_config.json"
+sha256 = "a025160ef0431f1a392f6f050c1310f4c5d9fb6f275932dbccba73c4d214bf10"
+
+[[tool.meshroom.assets]]
+name = "GroundingDINO_tokenizer_vocabulary"
+category = "Tokenizer"
+path = "models/tokenizer/vocab.txt"
+url = "https://gitlab.com/alicevision/imagepromptnnmodels/-/raw/01e3b228a52230712b61c2e59edb878049d4fb5b/models/tokenizer/vocab.txt"
+sha256 = "07eced375cec144d27c900241f3e339478dec958f92fddbc551f295c992038a3"
