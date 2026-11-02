@@ -38,7 +38,6 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
         ),
         desc.File(
             name="masksFolder",
-            label="Masks Folder",
             description="Folder containing original masks.",
             value="",
         ),
@@ -51,7 +50,6 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
         ),
         desc.ChoiceParam(
             name="outputContent",
-            label="Output Content",
             description="Content of the outputs:\n"
                         " - all: original prompts and the merged prompt '<firstPrompt>-Full'.\n"
                         " - mergedOnly: only the merged prompt '<firstPrompt>-Full'.",
@@ -61,7 +59,6 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
         ),
         desc.BoolParam(
             name="mergeInstances",
-            label="Merge Instances",
             description="Merge all the instances of the merged prompt '<firstPrompt>-Full' into a single instance.",
             value=False,
         ),
@@ -143,6 +140,7 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
         merge_instances = chunk.node.mergeInstances.value
 
         # Input masks are never modified: expose them through symbolic links
+        shutil.rmtree(color_masks_folder, ignore_errors=True)
         os.makedirs(color_masks_folder, exist_ok=True)
         if not merged_only:
             for filename in os.listdir(src):
@@ -168,7 +166,7 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
 
         self.resolve_paths(chunk.node, new_prompt)
 
-        frames = get_frame_pathes(chunk.node.input.value)
+        frames = get_frame_paths(chunk.node.input.value)
         main_prefix = f"colorMask_{prompts[0]}_{mask_type}_"
         color_palette = image.paletteGenerator()
         ks = chunk.node.itemBondingKernelSize.value
@@ -190,29 +188,15 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
             # Several secondary items can be associated to the same main item
             merges_by_frame = {}
             for s_id, p_id in mapping.items():
-                color_palette.generate_palette(max(int(s_id), int(p_id["item2_id"])) + 1)
+                main_id = p_id["item2_id"]
+                color_palette.generate_palette(max(int(s_id), int(main_id)) + 1)
                 second_color = np.array(color_palette.at(int(s_id)), dtype=np.float32) / 255.0
-                main_color = np.array(color_palette.at(int(p_id["item2_id"])), dtype=np.float32) / 255.0
-                logger.info(f"{s_id} {second_color} <=> {p_id['item2_id']} {main_color} with score {p_id['confidence_score']}")
+                main_color = np.array(color_palette.at(int(main_id)), dtype=np.float32) / 255.0
+                logger.info(f"{s_id} {second_color} <=> {main_id} {main_color} with score {p_id['confidence_score']}")
 
-                frame_chunks = []
-                frame_chunk = []
-                prev_fid = -1
                 for fid, pids in data[new_prompt].items():
-                    if p_id["item2_id"] in pids and fid in data[second_prompt] and s_id in data[second_prompt][fid]:
-                        # A chunk only holds consecutive frames passing the test
-                        if frame_chunk and int(fid) != prev_fid + 1:
-                            frame_chunks.append(frame_chunk)
-                            frame_chunk = []
-                        frame_chunk.append(int(fid))
-                        prev_fid = int(fid)
-                if len(frame_chunk):
-                    frame_chunks.append(frame_chunk)
-
-                for frame_chunk in frame_chunks:
-                    for fid in frame_chunk:
-                        frame_merges = merges_by_frame.setdefault(fid, {})
-                        frame_merges.setdefault(p_id["item2_id"], (main_color, []))[1].append(second_color)
+                    if main_id in pids and s_id in data[second_prompt].get(fid, ()):
+                        merges_by_frame.setdefault(int(fid), {}).setdefault(main_id, (main_color, []))[1].append(second_color)
 
             # The mapping being fixed for this secondary prompt, all its merges in a frame are applied in memory
             # so that each mask is read and written only once
@@ -298,7 +282,7 @@ The result is stored in a new prompt '<firstPrompt>-Full'.
                     os.symlink(os.path.abspath(os.path.join(src, filename)), new_color_masks_path)
 
 
-def get_frame_pathes(input_path):
+def get_frame_paths(input_path):
     from pyalicevision import sfmData, camera
     from pyalicevision import sfmDataIO
     from segmentationRDS.sfmData import isSfmDataFile
