@@ -531,8 +531,8 @@ def associate_items(data, item1:str, item2:str, min_iob_threshold:float=0.1, mot
     all_frames = sorted(set(data[item1].keys()).union(data[item2].keys()), key=int)
 
     # 1. Computation and accumulation
-    for idx, frame in enumerate(all_frames[:-1]):
-        next_frame = all_frames[idx + 1]
+    for idx, frame in enumerate(all_frames):
+        next_frame = all_frames[idx + 1] if idx + 1 < len(all_frames) else None
         
         frame_item1s = data[item1].get(frame, {})
         frame_item2s = data[item2].get(frame, {})
@@ -545,7 +545,8 @@ def associate_items(data, item1:str, item2:str, min_iob_threshold:float=0.1, mot
                     continue  
                 
                 motion_score = 1.0  
-                if (frame in traj_item1[b_id] and next_frame in traj_item1[b_id] and
+                if (next_frame is not None and
+                    frame in traj_item1[b_id] and next_frame in traj_item1[b_id] and
                     frame in traj_item2[p_id] and next_frame in traj_item2[p_id]):
                     
                     v_item1 = np.array(traj_item1[b_id][next_frame]) - np.array(traj_item1[b_id][frame])
