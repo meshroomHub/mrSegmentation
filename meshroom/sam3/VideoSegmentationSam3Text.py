@@ -1,4 +1,4 @@
-__version__ = "2.2"
+__version__ = "2.3"
 
 import copy
 import logging
@@ -36,6 +36,17 @@ cryptomatte from a text prompt.
             description="What to segment, one item per line.",
             value="person",
             semantic="multiline",
+        ),
+        desc.IntParam(
+            name="referenceFrame",
+            label="Reference Frame",
+            description="Frame number where text prompting starts.\n"
+                        "Segmentation is propagated from this frame to the last one, then from this frame back to the first one.\n"
+                        "Before the reference frame, 'forward'/'backward' outputs are relative to the propagation direction\n"
+                        "(i.e. going away from / coming back to the reference frame).\n"
+                        "If the value is lower than the first frame number, the first frame is used.",
+            value=0,
+            range=(0, 100000, 1),
         ),
         desc.File(
             name="segmentationModelPath",
@@ -285,6 +296,7 @@ cryptomatte from a text prompt.
     def _export_direction_masks(
         self,
         node,
+        order,
         frame_range,
         direction_name,
         direction_results,
@@ -294,7 +306,8 @@ cryptomatte from a text prompt.
         state,
         metadata_deep_model
     ):
-        """ Helper to process results, draw color masks, generate cryptomatte, and save outputs. """
+        """ Helper to process results, draw color masks, generate cryptomatte, and save outputs.
+        frame_range and direction_results use sequence-local indexes; order maps them to self.image_paths indexes. """
         from pyalicevision import image as avimg
         from segmentationRDS import image, sam3Utils
         import numpy as np
@@ -313,8 +326,6 @@ cryptomatte from a text prompt.
         }
         color_mask_ext = ext_map[direction_name]
 
-        first_frame_id = source_info["first_frame_id"]
-
         mask_images = state["mask_images"]
         boxes = state["boxes"]
         metadata_boxes = state["metadata_boxes"]
@@ -332,11 +343,13 @@ cryptomatte from a text prompt.
             get_y = (np.arange(source_info["h_ori"]) + 0.5) * (1.0 / source_info["PAR"])
             idxs_y = np.clip(get_y.astype(np.int32), 0, source_info["shape"][0] - 1)
 
-        for frame_id in frame_range:
+        for local_id in frame_range:
+            frame_id = order[local_id]
+            frame_key = self.image_paths[frame_id][2]
             color_mask_image = np.zeros(source_info["shape"], dtype=source_info["dtype"])
 
-            if (first_frame_id + frame_id) not in boxes[text_prompt][direction_name]:
-                boxes[text_prompt][direction_name][first_frame_id + frame_id] = {}
+            if frame_key not in boxes[text_prompt][direction_name]:
+                boxes[text_prompt][direction_name][frame_key] = {}
 
             if output_crypto:
                 crypto_id = np.zeros((source_info["h_ori"], source_info["w_ori"]), dtype=np.float32)
@@ -344,7 +357,7 @@ cryptomatte from a text prompt.
                 manifest = {}
 
             # Get detections for current frame (if any)
-            frame_detections = direction_results.get(frame_id, {})
+            frame_detections = direction_results.get(local_id, {})
 
             masks = []
             colors = []
@@ -372,7 +385,7 @@ cryptomatte from a text prompt.
 
                 # Process Bounding Box mapping
                 bbox = sam3Utils.xywhNorm2xyxy(mask_box_prob["box_xywh"], source_info["w_ori"], source_info["h_ori"])
-                boxes[text_prompt][direction_name][first_frame_id + frame_id][key] = bbox
+                boxes[text_prompt][direction_name][frame_key][key] = bbox
 
                 # Write the bounding boxes into the frame's metadata
                 x1, y1, x2, y2 = bbox
@@ -539,6 +552,102 @@ cryptomatte from a text prompt.
 
         return fwd_only, bwd_only, fwd_bwd
 
+    def _track_prompt(self, node, video_predictor, session_id, order, text_prompt,
+                      color_palette, source_info, tracking_state, metadata_deep_model):
+        """ Runs text prompting and propagation for one prompt on the sub-sequence `order`
+        (list of self.image_paths indexes, local index 0 being the reference frame). """
+        from segmentationRDS import sam3Utils
+
+        frame_number = len(order)
+        frame_idx_to_text_prompt, max_frame_num_to_track, track_dir = self._get_tracking_config(node, frame_number)
+        logger.info(f"frame_idx_to_text_prompt: {frame_idx_to_text_prompt}; direction = {track_dir}")
+
+        video_predictor.handle_request(request={"type": "reset_session", "session_id": session_id})
+
+        outputs_per_frame = {}
+
+        track_states = {
+            "fwd": {"prev_overlap": {}, "next_id": 0},
+            "bwd": {"prev_overlap": {}, "next_id": 0},
+            "merged": {"prev_overlap": {}, "next_id": 0}
+        }
+
+        for n, frame_idx in enumerate(frame_idx_to_text_prompt):
+            abs_frame = self.image_paths[order[frame_idx]][2]
+            logger.info(f"Text prompt at relative frame {frame_idx} (absolute frame {abs_frame})")
+
+            video_predictor.handle_request(
+                request={
+                    "type": "add_prompt",
+                    "session_id": session_id,
+                    "frame_index": frame_idx,
+                    "text": text_prompt
+                }
+            )
+            outputs_per_frame[frame_idx] = sam3Utils.propagateInVideo(video_predictor, session_id,
+                                                                      frame_idx, max_frame_num_to_track,
+                                                                      track_dir)
+
+            fwd_only, bwd_only, fwd_bwd = self._update_tracking_at_step(
+                n=n,
+                frame_idx=frame_idx,
+                frame_idx_to_text_prompt=frame_idx_to_text_prompt,
+                outputs_per_frame=outputs_per_frame,
+                track_states=track_states,
+                color_palette=color_palette,
+                combine_fwd_bwd=node.combineFwdAndBwdSeg.value
+            )
+
+            # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
+            last_frame_idx_fwd = frame_number
+            if n < len(frame_idx_to_text_prompt) - 1:
+                last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1]
+            logger.debug(f"Exporting forward boxes from frame index {frame_idx} to {last_frame_idx_fwd - 1}")
+
+            self._export_direction_masks(
+                node=node,
+                order=order,
+                frame_range=range(frame_idx, last_frame_idx_fwd),
+                direction_name="forward",
+                direction_results=fwd_only,
+                text_prompt=text_prompt,
+                color_palette=color_palette,
+                source_info=source_info,
+                state=tracking_state,
+                metadata_deep_model=metadata_deep_model
+            )
+
+            if node.combineFwdAndBwdSeg.value:
+                # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
+                first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
+
+                self._export_direction_masks(
+                    node=node,
+                    order=order,
+                    frame_range=range(first_frame_idx_bwd, frame_idx + 1),
+                    direction_name="backward",
+                    direction_results=bwd_only,
+                    text_prompt=text_prompt,
+                    color_palette=color_palette,
+                    source_info=source_info,
+                    state=tracking_state,
+                    metadata_deep_model=metadata_deep_model
+                )
+
+                if n > 0:
+                    self._export_direction_masks(
+                        node=node,
+                        order=order,
+                        frame_range=range(first_frame_idx_bwd - 1, frame_idx + 1),
+                        direction_name="merged",
+                        direction_results=fwd_bwd,
+                        text_prompt=text_prompt,
+                        color_palette=color_palette,
+                        source_info=source_info,
+                        state=tracking_state,
+                        metadata_deep_model=metadata_deep_model
+                    )
+
     def resolve_paths(self, node):
         """ Constructs system template paths mapping to the node output parameters. """
         if node.prompt.value == "":
@@ -609,23 +718,29 @@ cryptomatte from a text prompt.
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelVersion"] = "sam3-Video-TextPrompt"
 
             color_palette = image.paletteGenerator()
-            first_frame_id = self.image_paths[0][2]
             frame_number = len(self.image_paths)
 
-            frame_idx_to_text_prompt, max_frame_num_to_track, track_dir = self._get_tracking_config(chunk.node, frame_number)
-            logger.info(f"frame_idx_to_text_prompt: {frame_idx_to_text_prompt}; direction = {track_dir}")
+            # Convert reference frame number to an index in the sorted sequence
+            ref = chunk.node.referenceFrame.value
+            ref_idx = next((i for i, p in enumerate(self.image_paths) if int(p[2]) >= ref), None)
+            if ref_idx is None:
+                raise ValueError(f"Reference frame {ref} is after the last frame ({self.image_paths[-1][2]}).")
+            logger.info(f"Reference frame {self.image_paths[ref_idx][2]} (index {ref_idx})")
+
+            # Each pass runs the standard tracking on a sub-sequence starting at the reference frame:
+            # forward to the last frame, then (if needed) reversed down to the first frame.
+            orders = [list(range(ref_idx, frame_number))]
+            if ref_idx > 0:
+                orders.append(list(range(ref_idx, -1, -1)))
 
             pil_images, mask_images, source_info = self._load_source_images()
-            source_info["first_frame_id"] = first_frame_id
-
-            # Start tracking session
-            response = video_predictor.handle_request(
-                request={"type": "start_session", "resource_path": pil_images}
-            )
-            session_id = response["session_id"]
 
             boxes = {}
             metadata_boxes = {frame_id: {} for frame_id in range(frame_number)}
+            for text_prompt in self.text_prompts:
+                boxes[text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
+                for frame_id in range(frame_number):
+                    metadata_boxes[frame_id][text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
 
             tracking_state = {
                 "mask_images": mask_images,
@@ -633,98 +748,21 @@ cryptomatte from a text prompt.
                 "metadata_boxes": metadata_boxes
             }
 
-            # Run temporal tracking queries per text prompt configuration
-            for text_prompt in self.text_prompts:
-                logger.info(f"Processing prompt: {text_prompt}")
+            for order in orders:
+                logger.info(f"Tracking pass from frame {self.image_paths[order[0]][2]} to frame {self.image_paths[order[-1]][2]}")
+                response = video_predictor.handle_request(
+                    request={"type": "start_session", "resource_path": [pil_images[i] for i in order]}
+                )
+                session_id = response["session_id"]
 
-                boxes[text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
-                metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = text_prompt
+                # Run temporal tracking queries per text prompt configuration
+                for text_prompt in self.text_prompts:
+                    logger.info(f"Processing prompt: {text_prompt}")
+                    metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = text_prompt
+                    self._track_prompt(chunk.node, video_predictor, session_id, order, text_prompt,
+                                       color_palette, source_info, tracking_state, metadata_deep_model)
 
-                for frame_id in range(frame_number):
-                    metadata_boxes[frame_id][text_prompt] = {"forward": {}, "backward": {}, "merged": {}}
-
-                video_predictor.handle_request(request={"type": "reset_session", "session_id": session_id})
-
-                outputs_per_frame = {}
-
-                track_states = {
-                    "fwd": {"prev_overlap": {}, "next_id": 0},
-                    "bwd": {"prev_overlap": {}, "next_id": 0},
-                    "merged": {"prev_overlap": {}, "next_id": 0}
-                }
-
-                for n, frame_idx in enumerate(frame_idx_to_text_prompt):
-                    abs_frame = int(first_frame_id) + frame_idx
-                    logger.info(f"Text prompt at relative frame {frame_idx} (absolute frame {abs_frame})")
-
-                    video_predictor.handle_request(
-                        request={
-                            "type": "add_prompt",
-                            "session_id": session_id,
-                            "frame_index": frame_idx,
-                            "text": text_prompt
-                        }
-                    )
-                    outputs_per_frame[frame_idx] = sam3Utils.propagateInVideo(video_predictor, session_id,
-                                                                              frame_idx, max_frame_num_to_track,
-                                                                              track_dir)
-
-                    fwd_only, bwd_only, fwd_bwd = self._update_tracking_at_step(
-                        n=n,
-                        frame_idx=frame_idx,
-                        frame_idx_to_text_prompt=frame_idx_to_text_prompt,
-                        outputs_per_frame=outputs_per_frame,
-                        track_states=track_states,
-                        color_palette=color_palette,
-                        combine_fwd_bwd=chunk.node.combineFwdAndBwdSeg.value
-                    )
-
-                    # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
-                    last_frame_idx_fwd = frame_number
-                    if n < len(frame_idx_to_text_prompt) - 1:
-                        last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1]
-                    logger.debug(f"Exporting forward boxes from frame index {frame_idx} to {last_frame_idx_fwd - 1}")
-
-                    self._export_direction_masks(
-                        node=chunk.node,
-                        frame_range=range(frame_idx, last_frame_idx_fwd),
-                        direction_name="forward",
-                        direction_results=fwd_only,
-                        text_prompt=text_prompt,
-                        color_palette=color_palette,
-                        source_info=source_info,
-                        state=tracking_state,
-                        metadata_deep_model=metadata_deep_model
-                    )
-
-                    if chunk.node.combineFwdAndBwdSeg.value:
-                        # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
-                        first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
-
-                        self._export_direction_masks(
-                            node=chunk.node,
-                            frame_range=range(first_frame_idx_bwd, frame_idx + 1),
-                            direction_name="backward",
-                            direction_results=bwd_only,
-                            text_prompt=text_prompt,
-                            color_palette=color_palette,
-                            source_info=source_info,
-                            state=tracking_state,
-                            metadata_deep_model=metadata_deep_model
-                        )
-
-                        if n > 0:
-                            self._export_direction_masks(
-                                node=chunk.node,
-                                frame_range=range(first_frame_idx_bwd - 1, frame_idx + 1),
-                                direction_name="merged",
-                                direction_results=fwd_bwd,
-                                text_prompt=text_prompt,
-                                color_palette=color_palette,
-                                source_info=source_info,
-                                state=tracking_state,
-                                metadata_deep_model=metadata_deep_model
-                            )
+                video_predictor.handle_request(request={"type": "close_session", "session_id": session_id})
 
             prompts = [text_prompt.strip() for text_prompt in self.text_prompts if text_prompt.strip()]
             metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = ";".join(prompts)
@@ -759,8 +797,6 @@ cryptomatte from a text prompt.
             logger.info(f"Writing bounding boxes metadata to {json_filename}")
             with open(json_filename, "w", encoding="utf_8") as file:
                 json.dump(boxes, file, indent=4, ensure_ascii=False)
-
-            video_predictor.handle_request(request={"type": "close_session", "session_id": session_id})
 
         finally:
             torch.cuda.empty_cache()
