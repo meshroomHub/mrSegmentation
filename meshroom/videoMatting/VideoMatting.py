@@ -667,6 +667,14 @@ Matting node for video sequences.
                                     alpha[alpha < chunk.node.matteBlackPointLevel.value] = 0.0
                                     if chunk.node.blurMatte.value:
                                         alpha = cv2.blur(alpha, (3, 3))
+                                    # Matte reaching a crop side inside the image: the crop cuts the matte (box too small).
+                                    full_h, full_w = full_alpha[frame_id].shape[:2]
+                                    black_point = chunk.node.matteBlackPointLevel.value
+                                    sides = {"left": (x1 > 0, alpha[:, :2]), "right": (x2 < full_w, alpha[:, -2:]),
+                                             "top": (y1 > 0, alpha[:2]), "bottom": (y2 < full_h, alpha[-2:])}
+                                    cut_sides = [side for side, (inside, band) in sides.items() if inside and band.max() > black_point]
+                                    if cut_sides:
+                                        logger.warning(f"Frame {frame_id}, {key}: matte cut by the crop on side(s) {cut_sides}, bounding box too small.")
                                     full_alpha[frame_id][y1:y2, x1:x2, :] += alpha
                                     if chunk.node.outputCryptomatte.value:
                                         obj_name = text_prompt.replace(" ", "_")
