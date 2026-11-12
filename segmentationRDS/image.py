@@ -147,6 +147,18 @@ def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = T
 
     return (oiio_image, h, w, pixelAspectRatio, orientation)
 
+def orientedSize(imagePath: str):
+    """(width, height) of the image once oriented, PAR not applied (same space as loadImage(applyPAR=False)).
+    Only the header is read. Return None if the file cannot be opened."""
+    oiio_input = oiio.ImageInput.open(imagePath)
+    if oiio_input is None:
+        oiio.geterror()  # consume the error, otherwise OIIO prints it at exit
+        return None
+    spec = oiio_input.spec()
+    oiio_input.close()
+    orientation = int(find_metadata(spec, 'Orientation', 1)[0])
+    return (spec.height, spec.width) if orientation > 4 else (spec.width, spec.height)
+
 def writeImage(imagePath: str, image: np.ndarray, h_tgt: int, w_tgt: int, orientation: int = 1, pixelAspectRatio: float = 1.0, metadata=None, optWrite=None) -> None:
     if metadata is None:
         metadata = {}

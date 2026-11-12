@@ -126,8 +126,7 @@ are no longer tight boxes around the masks: do not use it as input of a node exp
                 if not sfmDataIO.load(dataAV, node.input.value, sfmDataIO.ALL):
                     raise RuntimeError(f"Cannot load SfMData: {node.input.value}")
                 for vId, v in dataAV.getViews().items():
-                    views[v.getFrameId()] = {"path": v.getImage().getImagePath(), "viewId": str(vId),
-                                             "size": (v.getImage().getWidth(), v.getImage().getHeight())}
+                    views[v.getFrameId()] = {"path": v.getImage().getImagePath(), "viewId": str(vId)}
 
             blurFolder = node.blurMapFolder.value
             cache = {"frame": None, "map": None}
@@ -162,8 +161,8 @@ are no longer tight boxes around the masks: do not use it as input of a node exp
                 blur = blurMapOf(frameIdx)
                 if blur is not None:
                     return blur.shape[1], blur.shape[0]
-                # shortcut: view size is the unoriented one, wrong for orientations 5-8 when the blur map is missing.
-                return views[frameIdx]["size"] if frameIdx in views else None
+                # Boxes are in the oriented space: the SfMData size is the stored (unoriented) one.
+                return image.orientedSize(views[frameIdx]["path"]) if frameIdx in views else None
 
             out, margins = bboxUtils.expand_boxes(data, marginOf, sizeOf)
 
