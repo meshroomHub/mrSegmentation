@@ -482,7 +482,8 @@ cryptomatte from a text prompt.
 
             # Initialize backward tracking
             bwd_frame0_only = {frame_idx: bwd_only[frame_idx]}
-            _, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"] = self._update_global_ids(
+            # Return global IDs (only the first frame is exported at this step)
+            bwd_only, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"] = self._update_global_ids(
                 bwd_frame0_only, track_states["bwd"]["prev_overlap"], track_states["bwd"]["next_id"], color_palette
             )
             logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
@@ -553,10 +554,37 @@ cryptomatte from a text prompt.
         return fwd_only, bwd_only, fwd_bwd
 
     def _track_prompt(self, node, video_predictor, session_id, order, text_prompt,
-                      color_palette, source_info, tracking_state, metadata_deep_model):
+                      color_palette, source_info, tracking_state, metadata_deep_model,
+                      seed=None, skip_ref_frame=False):
         """ Runs text prompting and propagation for one prompt on the sub-sequence `order`
-        (list of self.image_paths indexes, local index 0 being the reference frame). """
+        (list of self.image_paths indexes, local index 0 being the reference frame).
+
+        seed: result of a previous call on the other side of the reference frame. Its detections on the
+              reference frame are used as overlap detections so that global IDs stay continuous.
+        skip_ref_frame: do not export the reference frame (already exported by the seeding pass).
+        Returns the seed for a next pass: detections exported on the reference frame and ID counters. """
         from segmentationRDS import sam3Utils
+
+        state_to_dir = {"fwd": "forward", "bwd": "backward", "merged": "merged"}
+        anchors = {}
+
+        def export(direction_name, frame_range, direction_results):
+            if skip_ref_frame:
+                frame_range = [i for i in frame_range if i != 0]
+            elif 0 in frame_range:
+                anchors[direction_name] = direction_results.get(0, {})
+            self._export_direction_masks(
+                node=node,
+                order=order,
+                frame_range=frame_range,
+                direction_name=direction_name,
+                direction_results=direction_results,
+                text_prompt=text_prompt,
+                color_palette=color_palette,
+                source_info=source_info,
+                state=tracking_state,
+                metadata_deep_model=metadata_deep_model
+            )
 
         frame_number = len(order)
         frame_idx_to_text_prompt, max_frame_num_to_track, track_dir = self._get_tracking_config(node, frame_number)
@@ -566,11 +594,12 @@ cryptomatte from a text prompt.
 
         outputs_per_frame = {}
 
-        track_states = {
-            "fwd": {"prev_overlap": {}, "next_id": 0},
-            "bwd": {"prev_overlap": {}, "next_id": 0},
-            "merged": {"prev_overlap": {}, "next_id": 0}
-        }
+        track_states = {s: {"prev_overlap": {}, "next_id": 0} for s in state_to_dir}
+        if seed:
+            for s, d in state_to_dir.items():
+                anchor = seed["anchors"].get(d, {})
+                track_states[s]["prev_overlap"] = anchor
+                track_states[s]["next_id"] = max([seed["next_ids"][s]] + [int(k) + 1 for k in anchor])
 
         for n, frame_idx in enumerate(frame_idx_to_text_prompt):
             abs_frame = self.image_paths[order[frame_idx]][2]
@@ -588,6 +617,7 @@ cryptomatte from a text prompt.
                                                                       frame_idx, max_frame_num_to_track,
                                                                       track_dir)
 
+            seed_next_fwd = track_states["fwd"]["next_id"]
             fwd_only, bwd_only, fwd_bwd = self._update_tracking_at_step(
                 n=n,
                 frame_idx=frame_idx,
@@ -598,55 +628,35 @@ cryptomatte from a text prompt.
                 combine_fwd_bwd=node.combineFwdAndBwdSeg.value
             )
 
+            if seed and n == 0:
+                # Junction diagnostic: compare raw detections of this pass on the reference frame with the seed
+                anchor_ids = seed["anchors"].get("forward", {})
+                raw_count = len(sam3Utils.prepareMasksForVisualization({0: outputs_per_frame[0][0]})[0])
+                new_ids = sorted(k for k in fwd_only.get(0, {}) if k >= seed_next_fwd)
+                matched = raw_count - len(new_ids)
+                logger.info(f"Reference frame junction: {matched} object(s) matched with the previous pass "
+                            f"({len(anchor_ids)} in previous pass)")
+                if new_ids or matched < len(anchor_ids):
+                    logger.warning(f"Reference frame junction: new IDs {new_ids}, "
+                                   f"{len(anchor_ids) - matched} object(s) of the previous pass not matched")
+
             # write Fwd from frame_idx to frame_idx_to_text_prompt[n + 1]
             last_frame_idx_fwd = frame_number
             if n < len(frame_idx_to_text_prompt) - 1:
                 last_frame_idx_fwd = frame_idx_to_text_prompt[n + 1]
             logger.debug(f"Exporting forward boxes from frame index {frame_idx} to {last_frame_idx_fwd - 1}")
 
-            self._export_direction_masks(
-                node=node,
-                order=order,
-                frame_range=range(frame_idx, last_frame_idx_fwd),
-                direction_name="forward",
-                direction_results=fwd_only,
-                text_prompt=text_prompt,
-                color_palette=color_palette,
-                source_info=source_info,
-                state=tracking_state,
-                metadata_deep_model=metadata_deep_model
-            )
+            export("forward", range(frame_idx, last_frame_idx_fwd), fwd_only)
 
             if node.combineFwdAndBwdSeg.value:
                 # write Bwd from frame_idx_to_text_prompt[n - 1] to frame_idx
                 first_frame_idx_bwd = frame_idx_to_text_prompt[n - 1] + 1 if n > 0 else frame_idx
-
-                self._export_direction_masks(
-                    node=node,
-                    order=order,
-                    frame_range=range(first_frame_idx_bwd, frame_idx + 1),
-                    direction_name="backward",
-                    direction_results=bwd_only,
-                    text_prompt=text_prompt,
-                    color_palette=color_palette,
-                    source_info=source_info,
-                    state=tracking_state,
-                    metadata_deep_model=metadata_deep_model
-                )
+                export("backward", range(first_frame_idx_bwd, frame_idx + 1), bwd_only)
 
                 if n > 0:
-                    self._export_direction_masks(
-                        node=node,
-                        order=order,
-                        frame_range=range(first_frame_idx_bwd - 1, frame_idx + 1),
-                        direction_name="merged",
-                        direction_results=fwd_bwd,
-                        text_prompt=text_prompt,
-                        color_palette=color_palette,
-                        source_info=source_info,
-                        state=tracking_state,
-                        metadata_deep_model=metadata_deep_model
-                    )
+                    export("merged", range(first_frame_idx_bwd - 1, frame_idx + 1), fwd_bwd)
+
+        return {"anchors": anchors, "next_ids": {s: track_states[s]["next_id"] for s in state_to_dir}}
 
     def resolve_paths(self, node):
         """ Constructs system template paths mapping to the node output parameters. """
@@ -748,7 +758,8 @@ cryptomatte from a text prompt.
                 "metadata_boxes": metadata_boxes
             }
 
-            for order in orders:
+            seeds = {}
+            for pass_idx, order in enumerate(orders):
                 logger.info(f"Tracking pass from frame {self.image_paths[order[0]][2]} to frame {self.image_paths[order[-1]][2]}")
                 response = video_predictor.handle_request(
                     request={"type": "start_session", "resource_path": [pil_images[i] for i in order]}
@@ -759,8 +770,12 @@ cryptomatte from a text prompt.
                 for text_prompt in self.text_prompts:
                     logger.info(f"Processing prompt: {text_prompt}")
                     metadata_deep_model["Meshroom:mrSegmentation:Prompt"] = text_prompt
-                    self._track_prompt(chunk.node, video_predictor, session_id, order, text_prompt,
-                                       color_palette, source_info, tracking_state, metadata_deep_model)
+                    # Second pass is seeded with the reference frame results of the first one for ID continuity
+                    seed = self._track_prompt(chunk.node, video_predictor, session_id, order, text_prompt,
+                                              color_palette, source_info, tracking_state, metadata_deep_model,
+                                              seed=seeds.get(text_prompt), skip_ref_frame=pass_idx > 0)
+                    if pass_idx == 0:
+                        seeds[text_prompt] = seed
 
                 video_predictor.handle_request(request={"type": "close_session", "session_id": session_id})
 
