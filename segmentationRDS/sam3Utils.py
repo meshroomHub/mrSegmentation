@@ -451,32 +451,44 @@ def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel
     from scipy.ndimage import distance_transform_edt
 
     bonded_color_mask = None
+    height, width = masks[0].shape[:2]
 
-    # Dilate each individual mask
+    def roi(m, pad):
+        # Bbox of the non-zero pixels of m grown by pad, as slices (None if m is empty)
+        rows = np.flatnonzero(m.any(axis=1))
+        if not rows.size:
+            return None
+        cols = np.flatnonzero(m.any(axis=0))
+        return (slice(max(rows[0] - pad, 0), min(rows[-1] + 1 + pad, height)),
+                slice(max(cols[0] - pad, 0), min(cols[-1] + 1 + pad, width)))
+
+    # Dilate each individual mask (on its bbox only) and count overlaps
     kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_kernel_size, dilate_kernel_size))
-    dilated_masks = [cv2.dilate(np.round(m).astype(np.uint8), kernel_dilate) for m in masks]
-    dilated_stack = np.stack(dilated_masks, axis=0)
-
-    # Detect overlapping regions to generate the activation mask
-    overlap_map = np.sum(dilated_stack, axis=0)
-    conflict_zone = (overlap_map >= 2).astype(np.uint8) * 255
-    kernel_conflict = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (conflict_kernel_size, conflict_kernel_size))
-    action_mask = cv2.dilate(conflict_zone, kernel_conflict)
+    overlap_map = np.zeros((height, width), dtype=np.uint16)
+    for m in masks:
+        m_u8 = np.round(m).astype(np.uint8)
+        r = roi(m_u8, dilate_kernel_size)
+        if r is not None:
+            overlap_map[r] += cv2.dilate(m_u8[r], kernel_dilate)
+    conflict_zone = overlap_map >= 2
 
     # Merge individual masks into a single global mask
     masks_stack = np.stack(masks, axis=0)
-    global_mask_raw = (np.sum(masks_stack, axis=0) > 0).astype(np.uint8) * 255 
+    global_mask_raw = (np.sum(masks_stack, axis=0) > 0).astype(np.uint8) * 255
+    bonded_binary_mask = global_mask_raw.astype(np.float32)
 
-    # Apply morphological closing to fill holes in the global mask
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_kernel_size, close_kernel_size))
-    global_mask_closed = cv2.morphologyEx(global_mask_raw, cv2.MORPH_CLOSE, kernel_close)
-
-    # Apply the closed mask only within detected conflict regions
-    bonded_binary_mask = np.where(action_mask > 0, global_mask_closed, global_mask_raw).astype(np.float32)
+    # Apply the closed global mask only within the dilated conflict regions. Exact on the crop:
+    # it holds every conflict pixel, and closing needs 2 kernel sizes of context around the action area.
+    r = roi(conflict_zone, conflict_kernel_size + 2 * close_kernel_size)
+    if r is not None:
+        kernel_conflict = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (conflict_kernel_size, conflict_kernel_size))
+        action_mask = cv2.dilate(conflict_zone[r].astype(np.uint8) * 255, kernel_conflict)
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_kernel_size, close_kernel_size))
+        global_mask_closed = cv2.morphologyEx(global_mask_raw[r], cv2.MORPH_CLOSE, kernel_close)
+        bonded_binary_mask[r] = np.where(action_mask > 0, global_mask_closed, global_mask_raw[r])
 
     # Harmonized color bonding steps
     if colors:
-        height, width = masks[0].shape[:2]
         color_mask_raw = np.zeros((height, width, 3), dtype=np.float32)
         for mask, color in zip(masks, colors):
             color_mask_raw[mask > 0] = color
@@ -486,10 +498,13 @@ def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel
         bonding_gap = (bonded_binary_mask > 0) & (global_mask_raw == 0)
 
         bonded_color_mask = color_mask_raw.copy()
-        if np.any(bonding_gap):
+        # A closing only adds pixels within one kernel size of a raw pixel, so the nearest one is in the crop
+        r = roi(bonding_gap, 2 * close_kernel_size)
+        if r is not None:
+            gap = bonding_gap[r]
             # Find coordinates of the closest original colored pixels
-            _, indices = distance_transform_edt(global_mask_raw == 0, return_indices=True)
+            _, indices = distance_transform_edt(global_mask_raw[r] == 0, return_indices=True)
             # Map nearest colors directly into the gap
-            bonded_color_mask[bonding_gap] = color_mask_raw[indices[0][bonding_gap], indices[1][bonding_gap]]
+            bonded_color_mask[r][gap] = color_mask_raw[r][indices[0][gap], indices[1][gap]]
 
     return bonded_binary_mask, bonded_color_mask
