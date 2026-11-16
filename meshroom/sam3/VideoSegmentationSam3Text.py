@@ -288,7 +288,8 @@ cryptomatte from a text prompt.
                     "shape": img.shape,
                     "dtype": img.dtype
                 }
-            mask_images.append(np.zeros((*img.shape[:2], 1), dtype=img.dtype))
+            # Only "mask > 0" is written at the end, so a bool accumulator is enough (4x smaller than float32)
+            mask_images.append(np.zeros((*img.shape[:2], 1), dtype=bool))
 
         return pil_images, mask_images, source_info
 
@@ -412,7 +413,7 @@ cryptomatte from a text prompt.
                     color_mask_image = bonded_color
 
                 if is_definitive:
-                    mask_images[frame_id] = np.maximum(mask_images[frame_id], mask_global, out=mask_images[frame_id])
+                    mask_images[frame_id] |= mask_global > 0
 
             # Save color mask image
             if node.outputColorMasks.value:
@@ -767,6 +768,9 @@ cryptomatte from a text prompt.
                     request={"type": "start_session", "resource_path": [pil_images[i] for i in order]}
                 )
                 session_id = response["session_id"]
+                if pass_idx == len(orders) - 1:
+                    # SAM3 keeps its own resized copy of the frames: full resolution images are no longer needed
+                    del pil_images
 
                 # Run temporal tracking queries per text prompt configuration
                 for text_prompt in self.text_prompts:
