@@ -48,6 +48,31 @@ def compute_mask_iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
     return float(inter / union) if union > 0 else 0.0
 
 
+def _mask_bbox_area(det: dict):
+    # Cached on the detection: tight mask bbox (y0, y1, x0, x1) or None if empty, and pixel count
+    if "_bbox" not in det:
+        mask = det["mask"]
+        rows = np.flatnonzero(mask.any(axis=1))
+        cols = np.flatnonzero(mask.any(axis=0))
+        det["_bbox"] = (rows[0], rows[-1] + 1, cols[0], cols[-1] + 1) if rows.size else None
+        det["_area"] = int(np.count_nonzero(mask))
+    return det["_bbox"], det["_area"]
+
+
+def compute_det_mask_iou(det_a: dict, det_b: dict) -> float:
+    """ Same result as compute_mask_iou, but the intersection is only computed on the bboxes overlap. """
+    box_a, area_a = _mask_bbox_area(det_a)
+    box_b, area_b = _mask_bbox_area(det_b)
+    inter = 0
+    if box_a is not None and box_b is not None:
+        y0, y1 = max(box_a[0], box_b[0]), min(box_a[1], box_b[1])
+        x0, x1 = max(box_a[2], box_b[2]), min(box_a[3], box_b[3])
+        if y0 < y1 and x0 < x1:
+            inter = int(np.count_nonzero(np.logical_and(det_a["mask"][y0:y1, x0:x1], det_b["mask"][y0:y1, x0:x1])))
+    union = area_a + area_b - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
 def compute_box_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
     ax, ay, aw, ah = box_a
     bx, by, bw, bh = box_b
@@ -62,7 +87,7 @@ def compute_box_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
 
 def compute_similarity(det_a: dict, det_b: dict, use_mask: bool = True) -> float:
     if use_mask and det_a["mask"] is not None and det_b["mask"] is not None:
-        iou = compute_mask_iou(det_a["mask"], det_b["mask"])
+        iou = compute_det_mask_iou(det_a, det_b)
     else:
         iou = compute_box_iou(det_a["box_xywh"], det_b["box_xywh"])
     prob_score = (det_a["prob"] + det_b["prob"]) / 2.0
