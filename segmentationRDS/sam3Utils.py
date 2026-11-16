@@ -462,19 +462,24 @@ def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel
         return (slice(max(rows[0] - pad, 0), min(rows[-1] + 1 + pad, height)),
                 slice(max(cols[0] - pad, 0), min(cols[-1] + 1 + pad, width)))
 
-    # Dilate each individual mask (on its bbox only) and count overlaps
+    # Per mask, on its bbox only (pixels outside are zero): dilate and count overlaps,
+    # sum masks into the global mask and draw the raw color mask
     kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_kernel_size, dilate_kernel_size))
     overlap_map = np.zeros((height, width), dtype=np.uint16)
-    for m in masks:
-        m_u8 = np.round(m).astype(np.uint8)
-        r = roi(m_u8, dilate_kernel_size)
-        if r is not None:
-            overlap_map[r] += cv2.dilate(m_u8[r], kernel_dilate)
+    mask_sum = np.zeros((height, width), dtype=np.float64)
+    color_mask_raw = np.zeros((height, width, 3), dtype=np.float32) if colors else None
+    for i, m in enumerate(masks):
+        r = roi(m, dilate_kernel_size)
+        if r is None:
+            continue
+        crop = m[r]
+        overlap_map[r] += cv2.dilate(np.round(crop).astype(np.uint8), kernel_dilate)
+        mask_sum[r] += crop
+        if colors and i < len(colors):
+            color_mask_raw[r][crop > 0] = colors[i]
     conflict_zone = overlap_map >= 2
 
-    # Merge individual masks into a single global mask
-    masks_stack = np.stack(masks, axis=0)
-    global_mask_raw = (np.sum(masks_stack, axis=0) > 0).astype(np.uint8) * 255
+    global_mask_raw = (mask_sum > 0).astype(np.uint8) * 255
     bonded_binary_mask = global_mask_raw.astype(np.float32)
 
     # Apply the closed global mask only within the dilated conflict regions. Exact on the crop:
@@ -489,10 +494,6 @@ def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel
 
     # Harmonized color bonding steps
     if colors:
-        color_mask_raw = np.zeros((height, width, 3), dtype=np.float32)
-        for mask, color in zip(masks, colors):
-            color_mask_raw[mask > 0] = color
-
         # Identify new pixels created strictly by the bonding process
         # (Where the bonded binary is active, but raw binary wasn't)
         bonding_gap = (bonded_binary_mask > 0) & (global_mask_raw == 0)

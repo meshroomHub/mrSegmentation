@@ -358,6 +358,9 @@ cryptomatte from a text prompt.
             # Get detections for current frame (if any)
             frame_detections = direction_results.get(local_id, {})
 
+            # Bonding recomputes the color mask and the global mask, so they are only computed here without it
+            bond = len(frame_detections) > 1 and node.enableBonding.value
+
             masks = []
             colors = []
             for key, mask_box_prob in frame_detections.items():
@@ -368,7 +371,8 @@ cryptomatte from a text prompt.
                 color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
                 color_normalized = [x / 255.0 for x in color]
                 colors.append(color_normalized)
-                color_mask_image[mask] = color_normalized
+                if not bond:
+                    color_mask_image[mask] = color_normalized
 
                 # Generate IDs and hash structures for cryptomatte EXRs
                 if output_crypto:
@@ -392,10 +396,10 @@ cryptomatte from a text prompt.
                 metadata_boxes[frame_id][text_prompt][direction_name][f"{dir_prefix}_{text_prompt}_{key}"] = bbox_str
 
             if masks:
-                masks_stack = np.stack(masks, axis=0)
-                mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1).astype(np.float32)
-
-                if len(masks) > 1 and node.enableBonding.value:
+                if not bond:
+                    masks_stack = np.stack(masks, axis=0)
+                    mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1).astype(np.float32)
+                else:
                     ks = node.bondingKernelSize.value
                     bonded_bin, bonded_color = sam3Utils.bond_masks(
                         masks=masks,
