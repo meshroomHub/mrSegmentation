@@ -1,6 +1,5 @@
 __version__ = "2.3"
 
-import copy
 import logging
 import os
 from pathlib import Path
@@ -461,14 +460,15 @@ cryptomatte from a text prompt.
         """ Processes temporal tracking slices, resolves global IDs, and manages historical memory. """
         from segmentationRDS import sam3Utils
 
-        # Call prepareMasksForVisualization once per raw outputs dictionary to prevent repeating mutating calls
+        # Prepare raw outputs once and keep the prepared version for the next step (same mask arrays, no copy).
+        # No copy is needed below: slices are new dicts and ID assignment/merge never modify the detections.
         prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+        outputs_per_frame[frame_idx] = prepared_track
 
         # n == 0: Initialization block
         if n == 0:
-            # Deep copy to prevent in-place modifications from leaking between lists
-            fwd_only = copy.deepcopy(prepared_track)
-            bwd_only = copy.deepcopy(prepared_track)
+            fwd_only = prepared_track
+            bwd_only = prepared_track
             fwd_bwd = None
 
             # Properly initialize the Forward global ID tracking at n = 0
@@ -500,7 +500,7 @@ cryptomatte from a text prompt.
             return fwd_only, bwd_only, fwd_bwd
 
         # n > 0: Propagation & Merging block
-        track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+        track_fwd = prepared_track
         first_frame = frame_idx
 
         # Keep the remaining forward frames on the last segment instead of truncating to frame_idx
@@ -519,7 +519,7 @@ cryptomatte from a text prompt.
         fwd_bwd = None
 
         if combine_fwd_bwd:
-            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            track_bwd = prepared_track
             first_frame_bwd = frame_idx_to_text_prompt[n - 1]
             last_frame_bwd = frame_idx
             bwd = self._slice_track(track_bwd, first_frame_bwd, last_frame_bwd)
@@ -529,12 +529,10 @@ cryptomatte from a text prompt.
             )
             logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
 
-            # Fresh, completely isolated slice calculations for merge operations
-            prev_prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
-            track_fwd_for_merge = copy.deepcopy(prev_prepared_track)
-            track_bwd_for_merge = copy.deepcopy(prepared_track)
-            fwd_for_merge = self._slice_track(track_fwd_for_merge, first_frame_bwd, last_frame_bwd)
-            bwd_for_merge = self._slice_track(track_bwd_for_merge, first_frame_bwd, last_frame_bwd)
+            # Fresh slices for merge operations (merge_tracks clears them)
+            prev_prepared_track = outputs_per_frame[frame_idx_to_text_prompt[n - 1]]
+            fwd_for_merge = self._slice_track(prev_prepared_track, first_frame_bwd, last_frame_bwd)
+            bwd_for_merge = self._slice_track(prepared_track, first_frame_bwd, last_frame_bwd)
 
             fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = sam3Utils.merge_tracks(
                 fwd_results=fwd_for_merge,
@@ -631,7 +629,7 @@ cryptomatte from a text prompt.
             if seed and n == 0:
                 # Junction diagnostic: compare raw detections of this pass on the reference frame with the seed
                 anchor_ids = seed["anchors"].get("forward", {})
-                raw_count = len(sam3Utils.prepareMasksForVisualization({0: outputs_per_frame[0][0]})[0])
+                raw_count = len(outputs_per_frame[0].get(0, {}))
                 new_ids = sorted(k for k in fwd_only.get(0, {}) if k >= seed_next_fwd)
                 matched = raw_count - len(new_ids)
                 logger.info(f"Reference frame junction: {matched} object(s) matched with the previous pass "
