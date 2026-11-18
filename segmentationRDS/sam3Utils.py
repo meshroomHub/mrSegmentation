@@ -317,6 +317,7 @@ def assign_global_ids(
     next_global_id: int,
     similarity_threshold: float = 0.4,
     use_mask: bool = True,
+    prev_lost_detections: Optional[Dict[int, dict]] = None,
 ) -> Tuple[FrameResults, Dict[int, dict], int]:
     """
     Replace local IDs in the merged chunk with globally consistent IDs,
@@ -330,6 +331,9 @@ def assign_global_ids(
         prev_overlap_detections  : {global_id: det} of the overlap frame
                                    from the previous chunk (empty for chunk 0)
         next_global_id           : next available global ID
+        prev_lost_detections     : {global_id: det} of objects that ended just before the overlap frame. A local
+                                   object left unmatched on the overlap frame takes the ID of one of them it matches
+                                   (they are only used for matching, never copied into the result).
 
     Returns:
         global_chunk        : {frame_idx: {global_id: det}}
@@ -350,6 +354,19 @@ def assign_global_ids(
         similarity_threshold,
         use_mask,
     )
+
+    # Unmatched local objects that continue an object lost just before the overlap frame keep its ID
+    if prev_lost_detections and unmatched_local:
+        resumed, _, _ = match_detections(
+            {lid: overlap_det_curr[lid] for lid in unmatched_local},
+            {gid: det for gid, det in prev_lost_detections.items() if gid not in merged_overlap},
+            similarity_threshold,
+            use_mask,
+        )
+        for local_id, global_id in resumed.items():
+            local_to_global[local_id] = global_id
+            merged_overlap[global_id] = overlap_det_curr[local_id]
+            del unmatched_local[local_id]
 
     # Assign new global IDs to unmatched local objects and insert them directly
     # into merged_overlap — no temporary IDs, no collision risk.
@@ -390,7 +407,8 @@ def merge_tracks(
     similarity_threshold_merge: float = 0.3,
     similarity_threshold_track: float = 0.4,
     use_mask: bool = True,
-) -> Tuple[FrameResults, Dict[int, dict], int]:
+    prev_lost_detections: Optional[Dict[int, dict]] = None,
+) -> Tuple[FrameResults, Dict[int, dict], int, Dict[int, dict]]:
     """
     Process a single chunk end-to-end:
       1. Merge forward and backward results.
@@ -409,6 +427,7 @@ def merge_tracks(
         prev_overlap_detections  : {global_id: det} of the last frame of chunk k-1
                                    (empty dict for the very first chunk)
         next_global_id           : next available global ID (0 for the first chunk)
+        prev_lost_detections     : lost detections returned by the previous call (None for the first chunk)
 
     Returns:
         global_chunk        : {frame_idx: {global_id: det}}
@@ -416,6 +435,10 @@ def merge_tracks(
         new_overlap_frame   : {global_id: det} — last frame of this chunk,
                               to be passed as prev_overlap_detections for chunk k+1
         next_global_id      : updated, to be passed to the next call
+        lost_detections     : {global_id: det} of objects seen on the 2 frames before the last one but not on the
+                              last one (latest detection), to be passed as prev_lost_detections for chunk k+1.
+                              A backward pass starts at prompt frame - 1, so an object that only the backward pass
+                              tracks ends there and is found again by the next chunk on the overlap frame.
     """
     # Step 1 — fuse forward and backward within the chunk
     chunk_merged = merge_chunk_forward_backward(
@@ -434,10 +457,16 @@ def merge_tracks(
         next_global_id,
         similarity_threshold=similarity_threshold_track,
         use_mask=use_mask,
+        prev_lost_detections=prev_lost_detections,
     )
     chunk_merged.clear()
 
-    return global_chunk, new_overlap_frame, next_global_id
+    lost_detections: Dict[int, dict] = {}
+    for frame_idx in sorted(global_chunk)[-3:-1]:  # later frames overwrite: latest detection kept
+        lost_detections.update({gid: det for gid, det in global_chunk[frame_idx].items()
+                                if gid not in new_overlap_frame})
+
+    return global_chunk, new_overlap_frame, next_global_id, lost_detections
 
 
 def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel_size: int = 11,

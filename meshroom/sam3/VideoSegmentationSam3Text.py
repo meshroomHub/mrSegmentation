@@ -545,15 +545,18 @@ cryptomatte from a text prompt.
             fwd_for_merge = self._slice_track(prev_prepared_track, first_frame_bwd, last_frame_bwd)
             bwd_for_merge = self._slice_track(prepared_track, first_frame_bwd, last_frame_bwd)
 
-            fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = sam3Utils.merge_tracks(
-                fwd_results=fwd_for_merge,
-                bwd_results=bwd_for_merge,
-                prev_overlap_detections=track_states["merged"]["prev_overlap"],
-                next_global_id=track_states["merged"]["next_id"],
-                similarity_threshold_merge=0.3,
-                similarity_threshold_track=0.4,
-                use_mask=True,
-            )
+            merged_state = track_states["merged"]
+            fwd_bwd, merged_state["prev_overlap"], merged_state["next_id"], merged_state["lost"] = \
+                sam3Utils.merge_tracks(
+                    fwd_results=fwd_for_merge,
+                    bwd_results=bwd_for_merge,
+                    prev_overlap_detections=merged_state["prev_overlap"],
+                    next_global_id=merged_state["next_id"],
+                    similarity_threshold_merge=0.3,
+                    similarity_threshold_track=0.4,
+                    use_mask=True,
+                    prev_lost_detections=merged_state.get("lost"),
+                )
             color_palette.generate_palette(track_states["merged"]["next_id"] + 1)
             logger.info(f"next_global_id_merged = {track_states['merged']['next_id']}")
 
