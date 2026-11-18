@@ -140,10 +140,46 @@ def match_detections(
     return matches, unmatched_a, unmatched_b
 
 
-def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict]) -> dict:
+UNION_CONTAINMENT = 0.9  # smaller mask inside the larger one at this ratio: both describe the same object
+
+
+def _contained_union(chosen: dict, partner: dict, others) -> Optional[np.ndarray]:
+    """
+    Chosen mask plus the partner pixels claimed by no other detection, when the smaller of the two masks lies
+    inside the larger one (one direction lost a part of the object, e.g. a coat or an occluded limb).
+    Returns None when the masks disagree.
+    """
+    box_c, area_c = _mask_bbox_area(chosen)
+    box_p, area_p = _mask_bbox_area(partner)
+    if box_c is None or box_p is None:
+        return None
+    y0, y1 = max(box_c[0], box_p[0]), min(box_c[1], box_p[1])
+    x0, x1 = max(box_c[2], box_p[2]), min(box_c[3], box_p[3])
+    inter = int(np.count_nonzero(chosen["mask"][y0:y1, x0:x1] & partner["mask"][y0:y1, x0:x1])) if y0 < y1 and x0 < x1 else 0
+    if inter < UNION_CONTAINMENT * min(area_c, area_p):
+        return None
+    # Partner pixels lie in the partner bbox: only that crop can change
+    py0, py1, px0, px1 = box_p
+    add = partner["mask"][py0:py1, px0:px1].copy()
+    for det in others:
+        box_o, _ = _mask_bbox_area(det)
+        if box_o is None:
+            continue
+        oy0, oy1 = max(py0, box_o[0]), min(py1, box_o[1])
+        ox0, ox1 = max(px0, box_o[2]), min(px1, box_o[3])
+        if oy0 < oy1 and ox0 < ox1:
+            add[oy0 - py0:oy1 - py0, ox0 - px0:ox1 - px0] &= ~det["mask"][oy0:oy1, ox0:ox1]
+    mask = chosen["mask"].copy()
+    mask[py0:py1, px0:px1] |= add
+    return mask
+
+
+def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict], others=None) -> dict:
     """
     Merge two detections for the same instance on the same frame.
     If only one is available, return it as-is.
+    The mask of the most probable detection is kept. When others (the other detections of the frame) is given
+    and one mask lies inside the other, the partner pixels claimed by none of them are added to it.
     """
     if det_fwd is None:
         return det_bwd
@@ -156,11 +192,10 @@ def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict]) -> di
     w_b = 1.0 - w_f
 
     if det_fwd["mask"] is not None and det_bwd["mask"] is not None:
-        score = (
-            w_f * det_fwd["mask"].astype(np.float32)
-            + w_b * det_bwd["mask"].astype(np.float32)
-        )
-        mask = (score > 0.5).astype(bool)
+        chosen, partner = (det_fwd, det_bwd) if w_f > 0.5 else (det_bwd, det_fwd)
+        mask = _contained_union(chosen, partner, others) if others is not None else None
+        if mask is None:
+            mask = chosen["mask"]  # same as thresholding w_f * mask_fwd + w_b * mask_bwd at 0.5
     else:
         mask = det_fwd["mask"] if det_fwd["mask"] is not None else det_bwd["mask"]
 
@@ -259,7 +294,8 @@ def merge_chunk_forward_backward(
                 if fwd_id in matched_fwd_ids or fwd_id in seen_fwd_ids:
                     fwd_id = None  # voted fwd ID already taken on this frame: keep the object, as bwd-only
             if fwd_id is not None:
-                merged_frame[fwd_id] = merge_two_detections(fwd_frame.get(fwd_id), det_b)
+                others = [d for i, d in fwd_frame.items() if i != fwd_id] + [d for i, d in bwd_frame.items() if i != bwd_id]
+                merged_frame[fwd_id] = merge_two_detections(fwd_frame.get(fwd_id), det_b, others)
                 seen_fwd_ids.add(fwd_id)
             else:
                 # Object seen only in backward pass
