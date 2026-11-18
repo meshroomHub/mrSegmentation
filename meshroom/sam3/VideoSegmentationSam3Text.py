@@ -11,6 +11,12 @@ from meshroom.core.utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("VideoSegmentationSam3Text")
 
+# SAM3 hot-start removes a new track that no detection matches for hotstart_unmatch_thresh (default 8) of its first
+# hotstart_delay (15) frames: it drops real, partly occluded persons. 15 (max allowed, <= hotstart_delay) nearly
+# disables that removal while keeping the duplicate removal (hotstart_dup_thresh). Set on the model attributes, which
+# SAM3 reads at each frame (single GPU: the model lives in this process).
+SAM3_HOTSTART_UNMATCH_THRESH = 15
+
 class VideoSegmentationSam3Text(desc.Node):
     """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr
@@ -725,6 +731,8 @@ cryptomatte from a text prompt.
             gpus_to_use = [torch.cuda.current_device()]
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue,
                                                          gpus_to_use=gpus_to_use)
+            video_predictor.model.hotstart_unmatch_thresh = SAM3_HOTSTART_UNMATCH_THRESH
+            logger.info(f"SAM3 hotstart_unmatch_thresh = {SAM3_HOTSTART_UNMATCH_THRESH}")
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
