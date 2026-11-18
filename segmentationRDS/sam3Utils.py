@@ -201,17 +201,22 @@ def merge_chunk_forward_backward(
 
     - Forward IDs are used as the local reference IDs.
     - Objects seen only in backward receive a temporary negative local ID.
-    - The bwd->fwd mapping is stabilised by majority vote across all frames.
+    - A bwd detection takes the fwd ID it is matched with on its frame; the bwd->fwd majority vote over all
+      frames is only used on frames where it is not matched, or where that match is a one-frame accident
+      (the vote disagrees, the pair is matched on this frame only while the fwd ID lasts 3+ frames, and the
+      voted fwd ID still exists on this frame or later; once it has ended, the matched fwd ID is its continuation).
     """
     all_frames = sorted(set(fwd_results) | set(bwd_results))
 
     # Build a stable bwd_id -> fwd_id mapping via majority vote over all frames
     votes: Dict[int, Dict[int, int]] = {}  # {bwd_id: {fwd_id: count}}
+    frame_matches: Dict[int, Dict[int, int]] = {}  # {frame_idx: {bwd_id: fwd_id}} matched on that frame
 
     for frame_idx in all_frames:
         fwd_frame = fwd_results.get(frame_idx, {})
         bwd_frame = bwd_results.get(frame_idx, {})
         matches, _, _ = match_detections(fwd_frame, bwd_frame, similarity_threshold, use_mask)
+        frame_matches[frame_idx] = {bwd_id: fwd_id for fwd_id, bwd_id in matches.items()}
         for fwd_id, bwd_id in matches.items():
             votes.setdefault(bwd_id, {})
             votes[bwd_id][fwd_id] = votes[bwd_id].get(fwd_id, 0) + 1
@@ -220,6 +225,12 @@ def merge_chunk_forward_backward(
         bwd_id: max(fwd_votes, key=fwd_votes.get)
         for bwd_id, fwd_votes in votes.items()
     }
+    fwd_frame_count: Dict[int, int] = {}  # {fwd_id: number of frames where it exists}
+    fwd_last_frame: Dict[int, int] = {}   # {fwd_id: last frame where it exists}
+    for frame_idx, fwd_frame in fwd_results.items():
+        for fwd_id in fwd_frame:
+            fwd_frame_count[fwd_id] = fwd_frame_count.get(fwd_id, 0) + 1
+            fwd_last_frame[fwd_id] = max(fwd_last_frame.get(fwd_id, frame_idx), frame_idx)
 
     # Frame-by-frame fusion
     bwd_only_map: Dict[int, int] = {}
@@ -231,10 +242,23 @@ def merge_chunk_forward_backward(
         bwd_frame = bwd_results.get(frame_idx, {})
         merged_frame: Dict[int, dict] = {}
         seen_fwd_ids = set()
+        matches_here = frame_matches[frame_idx]  # one-to-one {bwd_id: fwd_id} on this frame
+        matched_fwd_ids = set(matches_here.values())
 
         for bwd_id, det_b in bwd_frame.items():
-            if bwd_id in bwd_to_fwd:
+            # The match on this frame wins over the vote: when they disagree (fwd ID switch inside the chunk),
+            # following the vote would output the matched fwd detection a second time under its own ID.
+            fwd_id = matches_here.get(bwd_id)
+            if (fwd_id is not None and bwd_to_fwd[bwd_id] != fwd_id and votes[bwd_id][fwd_id] == 1
+                    and fwd_frame_count[fwd_id] >= 3 and fwd_last_frame[bwd_to_fwd[bwd_id]] >= frame_idx):
+                # One-frame accidental match (e.g. a fwd mask leaking onto a neighbour): do not merge two
+                # different objects; the fwd detection is output alone below.
+                fwd_id = None
+            if fwd_id is None and bwd_id in bwd_to_fwd:
                 fwd_id = bwd_to_fwd[bwd_id]
+                if fwd_id in matched_fwd_ids or fwd_id in seen_fwd_ids:
+                    fwd_id = None  # voted fwd ID already taken on this frame: keep the object, as bwd-only
+            if fwd_id is not None:
                 merged_frame[fwd_id] = merge_two_detections(fwd_frame.get(fwd_id), det_b)
                 seen_fwd_ids.add(fwd_id)
             else:
