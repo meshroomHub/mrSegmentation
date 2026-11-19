@@ -37,6 +37,26 @@ def _sam3_accept_frame_tensor():
     sam3_video_inference.load_resource_as_video_frames = load_with_tensor
 
 
+def _sam3_reset_hotstart_counters_on_reverse(model):
+    """ In a "both" propagation, SAM3 runs the backward pass with the hot-start counters of the forward pass, and in
+    reverse every object born in the forward pass is back within the hot-start window. Persons tracked for 15+ forward
+    frames are then removed at the first backward frames. Clear the unmatched and duplicate counters when the
+    propagation turns backward, so the backward pass judges objects on its own frames. """
+    process_hotstart = model._process_hotstart
+    state = {"reverse": False}
+
+    def process_hotstart_with_reset(**kwargs):
+        if kwargs["reverse"] and not state["reverse"]:
+            metadata = kwargs["rank0_metadata"]   # this frame's copy, kept by SAM3 for the next frames
+            metadata["unmatched_frame_inds"].clear()
+            metadata["overlap_pair_to_frame_inds"].clear()
+            logger.debug(f"SAM3 hot-start counters reset at backward frame {kwargs['frame_idx']}")
+        state["reverse"] = kwargs["reverse"]
+        return process_hotstart(**kwargs)
+
+    model._process_hotstart = process_hotstart_with_reset
+
+
 class VideoSegmentationSam3Text(desc.Node):
     """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr
@@ -767,6 +787,7 @@ cryptomatte from a text prompt.
                                                          gpus_to_use=gpus_to_use)
             video_predictor.model.hotstart_unmatch_thresh = SAM3_HOTSTART_UNMATCH_THRESH
             logger.info(f"SAM3 hotstart_unmatch_thresh = {SAM3_HOTSTART_UNMATCH_THRESH}")
+            _sam3_reset_hotstart_counters_on_reverse(video_predictor.model)
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
