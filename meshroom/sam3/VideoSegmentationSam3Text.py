@@ -17,6 +17,26 @@ logger = logging.getLogger("VideoSegmentationSam3Text")
 # SAM3 reads at each frame (single GPU: the model lives in this process).
 SAM3_HOTSTART_UNMATCH_THRESH = 15
 
+
+def _sam3_accept_frame_tensor():
+    """ SAM3 only takes PIL images (8-bit, resized by PIL). Also accept [(frames, h, w)]:
+    frames is a (N, 3, image_size, image_size) tensor, already resized and normalized, h and w the source size. """
+    from sam3.model import sam3_video_inference
+    load = sam3_video_inference.load_resource_as_video_frames   # imported by name there: patch that module
+    if getattr(load, "accepts_frame_tensor", False):
+        return
+
+    def load_with_tensor(resource_path, image_size, offload_video_to_cpu, **kwargs):
+        if isinstance(resource_path, list) and isinstance(resource_path[0], tuple):
+            frames, orig_height, orig_width = resource_path[0]
+            assert frames.dim() == 4 and frames.shape[1:] == (3, image_size, image_size), "Expected (N, 3, S, S) frames"
+            return (frames if offload_video_to_cpu else frames.cuda()), orig_height, orig_width
+        return load(resource_path, image_size, offload_video_to_cpu, **kwargs)
+
+    load_with_tensor.accepts_frame_tensor = True
+    sam3_video_inference.load_resource_as_video_frames = load_with_tensor
+
+
 class VideoSegmentationSam3Text(desc.Node):
     """
 Based on the Segment Anything video predictor model 3, the node generates a binary mask, a colored mask and an exr
@@ -270,19 +290,30 @@ cryptomatte from a text prompt.
 
         return frame_idx_to_text_prompt, max_frame_num_to_track, track_dir
 
-    def _load_source_images(self):
-        """ Loads input images, generates baseline empty masks, and indexes camera dimensions. """
-        from PIL import Image
+    def _load_source_images(self, model):
+        """ Loads input images as SAM3 input frames (float, resized and normalized), generates baseline empty masks,
+        and indexes camera dimensions. """
         from segmentationRDS import image
         import numpy as np
+        import OpenImageIO as oiio
+        import torch
 
-        pil_images = []
+        size = model.image_size
+        mean = np.asarray(model.image_mean, dtype=np.float32)
+        std = np.asarray(model.image_std, dtype=np.float32)
+        # SAM3 squashes the frames to size x size (aspect ratio not kept), in float16 like SAM3's own loader
+        frames = torch.empty((len(self.image_paths), 3, size, size), dtype=torch.float16)
         mask_images = []
         source_info = None
 
         for idx, path_data in enumerate(self.image_paths):
             img, h_ori, w_ori, par, orientation = image.loadImage(str(path_data[0]), True)
-            pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
+            # Filtered (antialiased) float resize, no 8-bit round trip. Catmull-Rom = PIL's default bicubic.
+            # Clamp again: the filter negative lobes overshoot [0, 1] slightly.
+            small = oiio.ImageBufAlgo.resize(oiio.ImageBuf(img), filtername="catmull-rom",
+                                             roi=oiio.ROI(0, size, 0, size, 0, 1, 0, 3)).get_pixels(oiio.FLOAT)
+            small = (np.clip(small[..., :3], 0.0, 1.0) - mean) / std
+            frames[idx] = torch.from_numpy(small).permute(2, 0, 1)
 
             # Store source dimensions from the first image (assumed uniform)
             if idx == 0:
@@ -297,7 +328,7 @@ cryptomatte from a text prompt.
             # Only "mask > 0" is written at the end, so a bool accumulator is enough (4x smaller than float32)
             mask_images.append(np.zeros((*img.shape[:2], 1), dtype=bool))
 
-        return pil_images, mask_images, source_info
+        return frames, mask_images, source_info
 
     def _export_direction_masks(
         self,
@@ -757,7 +788,8 @@ cryptomatte from a text prompt.
             if ref_idx > 0:
                 orders.append(list(range(ref_idx, -1, -1)))
 
-            pil_images, mask_images, source_info = self._load_source_images()
+            _sam3_accept_frame_tensor()
+            frames, mask_images, source_info = self._load_source_images(video_predictor.model)
 
             boxes = {}
             metadata_boxes = {frame_id: {} for frame_id in range(frame_number)}
@@ -776,12 +808,12 @@ cryptomatte from a text prompt.
             for pass_idx, order in enumerate(orders):
                 logger.info(f"Tracking pass from frame {self.image_paths[order[0]][2]} to frame {self.image_paths[order[-1]][2]}")
                 response = video_predictor.handle_request(
-                    request={"type": "start_session", "resource_path": [pil_images[i] for i in order]}
+                    request={"type": "start_session", "resource_path": [(frames[order], source_info["shape"][0], source_info["shape"][1])]}
                 )
                 session_id = response["session_id"]
                 if pass_idx == len(orders) - 1:
-                    # SAM3 keeps its own resized copy of the frames: full resolution images are no longer needed
-                    del pil_images
+                    # SAM3 keeps its own copy of the frames (on the GPU)
+                    del frames
 
                 # Run temporal tracking queries per text prompt configuration
                 for text_prompt in self.text_prompts:
