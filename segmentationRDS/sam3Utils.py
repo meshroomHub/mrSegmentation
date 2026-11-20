@@ -42,12 +42,6 @@ def propagateInVideo(predictor, session_id, start_frame_idx=None, max_frame_num_
     return outputs_per_frame
 
 
-def compute_mask_iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
-    inter = np.logical_and(mask_a, mask_b).sum()
-    union = np.logical_or(mask_a, mask_b).sum()
-    return float(inter / union) if union > 0 else 0.0
-
-
 def _mask_bbox_area(det: dict):
     # Cached on the detection: tight mask bbox (y0, y1, x0, x1) or None if empty, and pixel count
     if "_bbox" not in det:
@@ -60,7 +54,7 @@ def _mask_bbox_area(det: dict):
 
 
 def compute_det_mask_iou(det_a: dict, det_b: dict) -> float:
-    """ Same result as compute_mask_iou, but the intersection is only computed on the bboxes overlap. """
+    """ Mask IoU of two detections; the intersection is only computed on the overlap of their mask bboxes. """
     box_a, area_a = _mask_bbox_area(det_a)
     box_b, area_b = _mask_bbox_area(det_b)
     inter = 0
@@ -195,7 +189,9 @@ def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict], other
         chosen, partner = (det_fwd, det_bwd) if w_f > 0.5 else (det_bwd, det_fwd)
         mask = _contained_union(chosen, partner, others) if others is not None else None
         if mask is None:
-            mask = chosen["mask"]  # same as thresholding w_f * mask_fwd + w_b * mask_bwd at 0.5
+            # Same as thresholding w_f * mask_fwd + w_b * mask_bwd at 0.5, except at an exact tie (w_f == 0.5,
+            # equal float32 probs): the bwd mask is kept instead of the intersection
+            mask = chosen["mask"]
     else:
         mask = det_fwd["mask"] if det_fwd["mask"] is not None else det_bwd["mask"]
 
