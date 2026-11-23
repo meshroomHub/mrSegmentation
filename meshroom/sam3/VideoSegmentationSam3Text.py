@@ -832,7 +832,8 @@ def get_image_paths_list(input_path):
                 for view_id, view in views.items():
                     image_paths.append((Path(view.getImage().getImagePath()), str(view_id), view.getFrameId()))
 
-            image_paths.sort(key=lambda x: x[0])
+            # Temporal order (frame_2 before frame_10), path order for equal frame IDs
+            image_paths.sort(key=lambda x: (x[2], x[0]))
     else:
         raise ValueError(f"Input path '{input_path}' is not a valid path (folder or sfmData file).")
     return image_paths
