@@ -1,6 +1,7 @@
-__version__ = "1.6"
+__version__ = "1.7"
 
 import logging
+import math
 import os
 from pathlib import Path
 from typing import Optional
@@ -11,12 +12,24 @@ from meshroom.core.utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("VideoMatting")
 
+# Maximum number of chunks the node is split into (to become a node parameter)
+MAX_CHUNKS = 4
+
+
+class ChunkCountParallelization(desc.Parallelization):
+    """Split the node into at most MAX_CHUNKS chunks of consecutive frames."""
+    def getSizes(self, node):
+        size = node.size
+        blockSize = max(1, math.ceil(size / MAX_CHUNKS))
+        return blockSize, size, math.ceil(size / blockSize)
+
 
 class VideoMatting(desc.Node):
     """
 Matting node for video sequences.
 """
     size = avpar.DynamicViewsSize("input")
+    parallelization = ChunkCountParallelization()
     gpu = lambda node: desc.Level.EXTREME if node.inferenceSize.value == 2048 else desc.Level.INTENSIVE
 
     category = "Matting"
@@ -465,11 +478,9 @@ Matting node for video sequences.
                                                     chunk.node.output.value, chunk.node.keepFilename.value,
                                                     chunk.node.extensionOut.value)
 
-            if not os.path.exists(chunk.node.output.value):
-                os.mkdir(chunk.node.output.value)
-
-            if chunk.node.outputCryptomatte.value and not os.path.exists(chunk.node.cryptomatteFolder.value):
-                os.mkdir(chunk.node.cryptomatteFolder.value)
+            os.makedirs(chunk.node.output.value, exist_ok=True)
+            if chunk.node.outputCryptomatte.value:
+                os.makedirs(chunk.node.cryptomatteFolder.value, exist_ok=True)
 
             device = torch.device("cuda") if torch.cuda.is_available() and chunk.node.useGpu.value else torch.device("cpu")
             model_path = os.getenv("VIDEOMATTING_SR_MODELS_PATH")
@@ -512,6 +523,12 @@ Matting node for video sequences.
             frame_h = chunk_image_paths[0][7]
             par = chunk_image_paths[0][8]
             first_frame_id = chunk_image_paths[0][2]
+            # Frames written by this chunk; slices crossing its boundaries are also computed by the neighbour chunk
+            # Empty range (blockSize 0) when multi-chunks are disabled: process the whole sequence
+            start, last = (chunk.range.start, chunk.range.last) if chunk.range.blockSize else (0, len(chunk_image_paths) - 1)
+            range_start = first_frame_id + start
+            range_last = first_frame_id + last
+            range_image_paths = chunk_image_paths[start:last + 1]
             exp_factor = chunk.node.boxExtensionFactor.value
             bboxes = bboxUtils.extract_tracking_with_slices(json_path, frame_w, frame_h, batch_size, overlap, exp_factor, par)
 
@@ -530,7 +547,7 @@ Matting node for video sequences.
             masks_by_frame = {}
             img, h_ori, w_ori, p_a_r, orientation = image.loadImage(str(chunk_image_paths[0][0]), True)
             source_info = {"h_ori": h_ori, "w_ori": w_ori, "PAR": p_a_r, "orientation": orientation}
-            for frame_id, image_path in enumerate(chunk_image_paths):
+            for image_path in range_image_paths:
                 full_alpha[image_path[2]] = np.zeros_like(img)
                 masks_by_frame[int(image_path[2])] = []
 
@@ -556,6 +573,8 @@ Matting node for video sequences.
                     for slice_idx, (slice_start, slice_end) in enumerate(time_slices):
                         start_frame_id = frame_chunk.start_frame + slice_start
                         stop_frame_id = frame_chunk.start_frame + slice_end
+                        if stop_frame_id <= range_start or start_frame_id > range_last:
+                            continue
                         logger.info(f"slice #{slice_idx}/{len(time_slices)-1}: processing frames [{start_frame_id}, {stop_frame_id}[")
                         cond_frames = []
                         mask_frames = []
@@ -632,6 +651,8 @@ Matting node for video sequences.
                             raise
 
                         for frame_id, box in sorted(frame_chunk.slices[slice_idx].items()):
+                            if not range_start <= frame_id <= range_last:
+                                continue  # owned by another chunk; skipped before the overlap blend which needs the previous slice
                             if frame_id >= start_frame_id and frame_id < stop_frame_id:
                                 frame_idx = frame_id - start_frame_id
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
@@ -695,7 +716,8 @@ Matting node for video sequences.
                             bbox_str = str(x1) + ";" + str(y1)+ ";" + str(x2)+ ";" + str(y2)
                             metadata_boxes[frame_idx][text_prompt][text_prompt + "_" + str(obj_id)] = bbox_str
 
-            for frame_id, image_path in enumerate(chunk_image_paths):
+            for image_path in range_image_paths:
+                frame_id = image_path[2]
                 opt_write = avimg.ImageWriteOptions()
                 opt_write.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
                 if Path(image_path[4]).suffix.lower() == ".exr":
@@ -703,16 +725,16 @@ Matting node for video sequences.
                     opt_write.exrCompressionLevel(300)
 
                 frame_metadata_deep_model = dict(metadata_deep_model_base)
-                for _, bboxes in metadata_boxes[first_frame_id + frame_id].items():
+                for _, bboxes in metadata_boxes[frame_id].items():
                     for k, box in bboxes.items():
                         frame_metadata_deep_model["Meshroom:mrSegmentation:" + k] = box
-                alpha = np.clip(full_alpha[image_path[2]], 0, 1)
+                alpha = np.clip(full_alpha[frame_id], 0, 1)
                 image.writeImage(image_path[4], alpha, source_info["h_ori"], source_info["w_ori"], source_info["orientation"],
                                  source_info["PAR"], frame_metadata_deep_model, opt_write)
                 
                 if chunk.node.outputCryptomatte.value:
-                    masks_infos = masks_by_frame.get(first_frame_id + frame_id, [])
-                    self._build_cryptomatte_for_frame_top4(first_frame_id + frame_id,
+                    masks_infos = masks_by_frame.get(frame_id, [])
+                    self._build_cryptomatte_for_frame_top4(frame_id,
                                                         masks_infos,
                                                         image_path[5],
                                                         "cryptoObject",
