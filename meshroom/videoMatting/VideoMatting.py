@@ -12,15 +12,12 @@ from meshroom.core.utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("VideoMatting")
 
-# Maximum number of chunks the node is split into (to become a node parameter)
-MAX_CHUNKS = 4
-
 
 class ChunkCountParallelization(desc.Parallelization):
-    """Split the node into at most MAX_CHUNKS chunks of consecutive frames."""
+    """Split the node into at most 'maxChunks' chunks of consecutive frames."""
     def getSizes(self, node):
         size = node.size
-        blockSize = max(1, math.ceil(size / MAX_CHUNKS))
+        blockSize = max(1, math.ceil(size / max(1, node.maxChunks.value)))
         return blockSize, size, math.ceil(size / blockSize)
 
 
@@ -84,6 +81,14 @@ Matting node for video sequences.
             name="overlap",
             description="Number of overlaping frames between 2 consecutive batches. Must be lower than batch size.",
             value=2,
+        ),
+        desc.IntParam(
+            name="maxChunks",
+            label="Max Chunks",
+            description="Maximum number of chunks the sequence is split into for parallel computation.\n"
+                        "Each chunk reloads the model and recomputes one extra slice per object at each chunk boundary.",
+            value=4,
+            range=(1, 100, 1),
         ),
         desc.FloatParam(
             name="boxExtensionFactor",
