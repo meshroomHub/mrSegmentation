@@ -527,19 +527,18 @@ Matting node for video sequences.
             frame_w = chunk_image_paths[0][6]
             frame_h = chunk_image_paths[0][7]
             par = chunk_image_paths[0][8]
-            first_frame_id = chunk_image_paths[0][2]
+            paths_by_frame = {image_path[2]: image_path for image_path in chunk_image_paths}
             # Frames written by this chunk; slices crossing its boundaries are also computed by the neighbour chunk
             # Empty range (blockSize 0) when multi-chunks are disabled: process the whole sequence
             start, last = (chunk.range.start, chunk.range.last) if chunk.range.blockSize else (0, len(chunk_image_paths) - 1)
-            range_start = first_frame_id + start
-            range_last = first_frame_id + last
             range_image_paths = chunk_image_paths[start:last + 1]
+            range_start = range_image_paths[0][2]
+            range_last = range_image_paths[-1][2]
             exp_factor = chunk.node.boxExtensionFactor.value
             bboxes = bboxUtils.extract_tracking_with_slices(json_path, frame_w, frame_h, batch_size, overlap, exp_factor, par)
 
-            metadata_boxes = {}
-            for frame_id in range(len(chunk_image_paths)):
-                metadata_boxes[first_frame_id + frame_id] = {}
+            # Keyed by SfM frame ID, like the tracking boxes that fill it
+            metadata_boxes = {image_path[2]: {} for image_path in chunk_image_paths}
 
             logger.debug(f"bboxes.keys() = {bboxes.keys()}")
             prompts = [key.rsplit('_', 1)[0] for key in bboxes.keys()]
@@ -585,7 +584,7 @@ Matting node for video sequences.
                         mask_frames = []
                         for frame_id, box in frame_chunk.slices[slice_idx].items():
                             if start_frame_id <= frame_id < stop_frame_id:
-                                img, h_ori, w_ori, _, orientation = image.loadImage(str(chunk_image_paths[frame_id - first_frame_id][0]),
+                                img, h_ori, w_ori, _, orientation = image.loadImage(str(paths_by_frame[frame_id][0]),
                                                                                     True, True, True, chunk.node.maskInAlphaChannel.value)
                                 x1, y1, x2, y2 = bboxUtils.box_to_display(box, source_info["PAR"])
                                 img_buf = oiio.ImageBuf(img[:,:,0:3])
@@ -602,7 +601,7 @@ Matting node for video sequences.
                                     else:
                                         raise ValueError("No alpha channel in source image, mask cannot be extracted.")
                                 else:
-                                    mask_path = str(chunk_image_paths[frame_id - first_frame_id][1])
+                                    mask_path = str(paths_by_frame[frame_id][1])
                                     mask_path = mask_path.replace("%PROMPT%", text_prompt)
                                     color_mask = True
                                     if not os.path.exists(mask_path):
