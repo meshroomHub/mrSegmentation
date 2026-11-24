@@ -44,6 +44,8 @@ def propagateInVideo(predictor, session_id, start_frame_idx=None, max_frame_num_
 
 def _mask_bbox_area(det: dict):
     # Cached on the detection: tight mask bbox (y0, y1, x0, x1) or None if empty, and pixel count
+    if det["mask"] is None:
+        return None, 0
     if "_bbox" not in det:
         mask = det["mask"]
         rows = np.flatnonzero(mask.any(axis=1))
