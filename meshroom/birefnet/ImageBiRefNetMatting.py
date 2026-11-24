@@ -147,6 +147,7 @@ In case neither tracker nor json file is available, the model is applied on the 
         from segmentationRDS import image, segmentation, nktracker
         import numpy as np
         import torch
+        from pyalicevision import image as avimg
 
         processor = None
         try:
@@ -214,10 +215,13 @@ In case neither tracker nor json file is available, the model is applied on the 
                     image.writeImage(oFile[0], mask, h_ori, w_ori, orientation, PAR)
 
                     if chunk.node.outputBboxImage.value:
+                        # img holds sRGB values: no conversion, writeImage would otherwise apply linear->sRGB again.
+                        optWrite = avimg.ImageWriteOptions()
+                        optWrite.toColorSpace(avimg.EImageColorSpace_NO_CONVERSION)
                         bbox_img = img.copy()
                         for bbox in bboxes:
                             bbox_img = image.addRectangle(bbox_img, bbox, (0, 255, 0))
-                        image.writeImage(oFile[1], bbox_img, h_ori, w_ori, orientation, PAR)
+                        image.writeImage(oFile[1], bbox_img, h_ori, w_ori, orientation, PAR, optWrite=optWrite)
 
         finally:
             del processor
