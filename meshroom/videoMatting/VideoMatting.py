@@ -228,7 +228,7 @@ Matting node for video sequences.
                     output_cryptomatte_path = os.path.join(output_dir, "cryptomattes", "cryptomatte_" + str(view_id) + ".exr")
                 paths.append((input_file, input_file_mask, frame_id, str(view_id), output_file_matte,
                               output_cryptomatte_path, img_width, img_height, par))
-            paths.sort(key=lambda x: x[0])
+            paths.sort(key=lambda x: int(x[2]))
 
         return paths
 
