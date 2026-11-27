@@ -593,3 +593,55 @@ def associate_items(data, item1:str, item2:str, min_iob_threshold:float=0.1, mot
             final_associations[b_id] = {"item2_id": p_id, "confidence_score": round(combo['score'], 3)}
             
     return final_associations
+
+
+def expand_boxes(data: dict, margin_of, size_of) -> tuple[dict, dict]:
+    """
+    Grow every box of a bboxes.json content by a per box margin, for all labels and tracking keys.
+    margin_of(frame_idx, box) -> margin in pixels, size_of(frame_idx) -> (w, h) or None (no clamping).
+    Frames are visited in order so that margin_of can cache per frame data.
+    Return (new data, {"label_objId": [margins]}).
+    """
+    out = {label: {tkey: dict(frames) if isinstance(frames, dict) else frames for tkey, frames in tracks.items()}
+           for label, tracks in data.items()}
+    margins = {}
+    # Keep the original frame keys (possibly zero padded), visit them in numerical order.
+    all_frames = sorted({f for tracks in out.values() for frames in tracks.values()
+                         if isinstance(frames, dict) for f in frames}, key=int)
+    for frame_key in all_frames:
+        frame_idx = int(frame_key)
+        size = size_of(frame_idx)
+        for label, tracks in out.items():
+            for frames in tracks.values():
+                if not isinstance(frames, dict) or frame_key not in frames:
+                    continue
+                objs = dict(frames[frame_key])
+                for obj_id, box in objs.items():
+                    if not box:
+                        continue
+                    m = margin_of(frame_idx, box)
+                    x1, y1 = max(0, int(math.floor(box[0] - m))), max(0, int(math.floor(box[1] - m)))
+                    x2, y2 = int(math.ceil(box[2] + m)), int(math.ceil(box[3] + m))
+                    if size is not None:
+                        x2, y2 = min(size[0], x2), min(size[1], y2)
+                    objs[obj_id] = [x1, y1, x2, y2]
+                    margins.setdefault(f"{label}_{obj_id}", []).append(m)
+                frames[frame_key] = objs
+    return out, margins
+
+
+if __name__ == "__main__":
+    # Self-check of expand_boxes
+    src = {"object": {"forward": {"1": {"0": [10, 10, 20, 20], "1": [0, 0, 5, 95]}, "2": {"0": [50, 50, 60, 60]}},
+                      "backward": {}, "merged": {}}}
+    out, margins = expand_boxes(src, lambda f, b: 4, lambda f: (100, 100))
+    assert out["object"]["forward"]["1"]["0"] == [6, 6, 24, 24]
+    assert out["object"]["forward"]["1"]["1"] == [0, 0, 9, 99]
+    assert out["object"]["forward"]["2"]["0"] == [46, 46, 64, 64]
+    assert out["object"]["backward"] == {} and out["object"]["merged"] == {}
+    assert src["object"]["forward"]["1"]["0"] == [10, 10, 20, 20]  # input untouched
+    assert margins == {"object_0": [4, 4], "object_1": [4]}
+    assert expand_boxes(src, lambda f, b: 0, lambda f: None)[0] == src
+    padded = {"l": {"merged": {"0012": {"3": [1, 1, 2, 2]}}}}
+    assert expand_boxes(padded, lambda f, b: f, lambda f: None)[0] == {"l": {"merged": {"0012": {"3": [0, 0, 14, 14]}}}}
+    print("OK")

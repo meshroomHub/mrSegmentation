@@ -111,7 +111,7 @@ def fromRawToUsualOrientation(x, y, width, height, PAR, orientation):
         x1 = xtmp
     return(x1, y1)
 
-def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = True, srgb: bool = True, withAlpha: bool = False):
+def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = True, srgb: bool = True, withAlpha: bool = False, clamp: bool = True):
     oiio_input = oiio.ImageInput.open(imagePath)
     oiio_spec = oiio_input.spec()
     oiio_input.close()
@@ -139,12 +139,25 @@ def loadImage(imagePath: str, applyPAR: bool = False, applyOrientation: bool = T
         oiio_image_buf = oiio.ImageBufAlgo.resize(oiio_image_buf, roi=oiio.ROI(0, w, 0, nh, 0, 1, 0, c+1))
         oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
 
-    oiio_image_buf = oiio.ImageBuf(oiio_image)
-    oiio.ImageBufAlgo.max(oiio_image_buf, oiio_image_buf, 0.0)
-    oiio.ImageBufAlgo.min(oiio_image_buf, oiio_image_buf, 1.0)
-    oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
+    if clamp:
+        oiio_image_buf = oiio.ImageBuf(oiio_image)
+        oiio.ImageBufAlgo.max(oiio_image_buf, oiio_image_buf, 0.0)
+        oiio.ImageBufAlgo.min(oiio_image_buf, oiio_image_buf, 1.0)
+        oiio_image = oiio_image_buf.get_pixels(format=oiio.FLOAT)
 
     return (oiio_image, h, w, pixelAspectRatio, orientation)
+
+def orientedSize(imagePath: str):
+    """(width, height) of the image once oriented, PAR not applied (same space as loadImage(applyPAR=False)).
+    Only the header is read. Return None if the file cannot be opened."""
+    oiio_input = oiio.ImageInput.open(imagePath)
+    if oiio_input is None:
+        oiio.geterror()  # consume the error, otherwise OIIO prints it at exit
+        return None
+    spec = oiio_input.spec()
+    oiio_input.close()
+    orientation = int(find_metadata(spec, 'Orientation', 1)[0])
+    return (spec.height, spec.width) if orientation > 4 else (spec.width, spec.height)
 
 def writeImage(imagePath: str, image: np.ndarray, h_tgt: int, w_tgt: int, orientation: int = 1, pixelAspectRatio: float = 1.0, metadata=None, optWrite=None) -> None:
     if metadata is None:
