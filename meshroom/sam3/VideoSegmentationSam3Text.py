@@ -1,6 +1,5 @@
-__version__ = "2.3"
+__version__ = "2.4"
 
-import copy
 import logging
 import os
 from pathlib import Path
@@ -11,6 +10,52 @@ from meshroom.core import desc
 from meshroom.core.utils import VERBOSE_LEVEL
 
 logger = logging.getLogger("VideoSegmentationSam3Text")
+
+# SAM3 hot-start removes a new track that no detection matches for hotstart_unmatch_thresh (default 8) of its first
+# hotstart_delay (15) frames: it drops real, partly occluded persons. 15 (max allowed, <= hotstart_delay) nearly
+# disables that removal while keeping the duplicate removal (hotstart_dup_thresh). Set on the model attributes, which
+# SAM3 reads at each frame (single GPU: the model lives in this process).
+SAM3_HOTSTART_UNMATCH_THRESH = 15
+
+
+def _sam3_accept_frame_tensor():
+    """ SAM3 only takes PIL images (8-bit, resized by PIL). Also accept [(frames, h, w)]:
+    frames is a (N, 3, image_size, image_size) tensor, already resized and normalized, h and w the source size. """
+    from sam3.model import sam3_video_inference
+    load = sam3_video_inference.load_resource_as_video_frames   # imported by name there: patch that module
+    if getattr(load, "accepts_frame_tensor", False):
+        return
+
+    def load_with_tensor(resource_path, image_size, offload_video_to_cpu, **kwargs):
+        if isinstance(resource_path, list) and isinstance(resource_path[0], tuple):
+            frames, orig_height, orig_width = resource_path[0]
+            assert frames.dim() == 4 and frames.shape[1:] == (3, image_size, image_size), "Expected (N, 3, S, S) frames"
+            return (frames if offload_video_to_cpu else frames.cuda()), orig_height, orig_width
+        return load(resource_path, image_size, offload_video_to_cpu, **kwargs)
+
+    load_with_tensor.accepts_frame_tensor = True
+    sam3_video_inference.load_resource_as_video_frames = load_with_tensor
+
+
+def _sam3_reset_hotstart_counters_on_reverse(model):
+    """ In a "both" propagation, SAM3 runs the backward pass with the hot-start counters of the forward pass, and in
+    reverse every object born in the forward pass is back within the hot-start window. Persons tracked for 15+ forward
+    frames are then removed at the first backward frames. Clear the unmatched and duplicate counters when the
+    propagation turns backward, so the backward pass judges objects on its own frames. """
+    process_hotstart = model._process_hotstart
+    state = {"reverse": False}
+
+    def process_hotstart_with_reset(**kwargs):
+        if kwargs["reverse"] and not state["reverse"]:
+            metadata = kwargs["rank0_metadata"]   # this frame's copy, kept by SAM3 for the next frames
+            metadata["unmatched_frame_inds"].clear()
+            metadata["overlap_pair_to_frame_inds"].clear()
+            logger.debug(f"SAM3 hot-start counters reset at backward frame {kwargs['frame_idx']}")
+        state["reverse"] = kwargs["reverse"]
+        return process_hotstart(**kwargs)
+
+    model._process_hotstart = process_hotstart_with_reset
+
 
 class VideoSegmentationSam3Text(desc.Node):
     """
@@ -265,19 +310,30 @@ cryptomatte from a text prompt.
 
         return frame_idx_to_text_prompt, max_frame_num_to_track, track_dir
 
-    def _load_source_images(self):
-        """ Loads input images, generates baseline empty masks, and indexes camera dimensions. """
-        from PIL import Image
+    def _load_source_images(self, model):
+        """ Loads input images as SAM3 input frames (float, resized and normalized), generates baseline empty masks,
+        and indexes camera dimensions. """
         from segmentationRDS import image
         import numpy as np
+        import OpenImageIO as oiio
+        import torch
 
-        pil_images = []
+        size = model.image_size
+        mean = np.asarray(model.image_mean, dtype=np.float32)
+        std = np.asarray(model.image_std, dtype=np.float32)
+        # SAM3 squashes the frames to size x size (aspect ratio not kept), in float16 like SAM3's own loader
+        frames = torch.empty((len(self.image_paths), 3, size, size), dtype=torch.float16)
         mask_images = []
         source_info = None
 
         for idx, path_data in enumerate(self.image_paths):
             img, h_ori, w_ori, par, orientation = image.loadImage(str(path_data[0]), True)
-            pil_images.append(Image.fromarray((255.0 * img).astype("uint8")))
+            # Filtered (antialiased) float resize, no 8-bit round trip. Catmull-Rom = PIL's default bicubic.
+            # Clamp again: the filter negative lobes overshoot [0, 1] slightly.
+            small = oiio.ImageBufAlgo.resize(oiio.ImageBuf(img), filtername="catmull-rom",
+                                             roi=oiio.ROI(0, size, 0, size, 0, 1, 0, 3)).get_pixels(oiio.FLOAT)
+            small = (np.clip(small[..., :3], 0.0, 1.0) - mean) / std
+            frames[idx] = torch.from_numpy(small).permute(2, 0, 1)
 
             # Store source dimensions from the first image (assumed uniform)
             if idx == 0:
@@ -289,9 +345,10 @@ cryptomatte from a text prompt.
                     "shape": img.shape,
                     "dtype": img.dtype
                 }
-            mask_images.append(np.zeros((*img.shape[:2], 1), dtype=img.dtype))
+            # Only "mask > 0" is written at the end, so a bool accumulator is enough (4x smaller than float32)
+            mask_images.append(np.zeros((*img.shape[:2], 1), dtype=bool))
 
-        return pil_images, mask_images, source_info
+        return frames, mask_images, source_info
 
     def _export_direction_masks(
         self,
@@ -359,6 +416,9 @@ cryptomatte from a text prompt.
             # Get detections for current frame (if any)
             frame_detections = direction_results.get(local_id, {})
 
+            # Bonding recomputes the color mask and the global mask, so they are only computed here without it
+            bond = len(frame_detections) > 1 and node.enableBonding.value
+
             masks = []
             colors = []
             for key, mask_box_prob in frame_detections.items():
@@ -369,7 +429,8 @@ cryptomatte from a text prompt.
                 color = color_palette.at(int(key)) if color_palette.at(int(key)) is not None else [255, 255, 255]
                 color_normalized = [x / 255.0 for x in color]
                 colors.append(color_normalized)
-                color_mask_image[mask] = color_normalized
+                if not bond:
+                    color_mask_image[mask] = color_normalized
 
                 # Generate IDs and hash structures for cryptomatte EXRs
                 if output_crypto:
@@ -393,10 +454,10 @@ cryptomatte from a text prompt.
                 metadata_boxes[frame_id][text_prompt][direction_name][f"{dir_prefix}_{text_prompt}_{key}"] = bbox_str
 
             if masks:
-                masks_stack = np.stack(masks, axis=0)
-                mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1).astype(np.float32)
-
-                if len(masks) > 1 and node.enableBonding.value:
+                if not bond:
+                    masks_stack = np.stack(masks, axis=0)
+                    mask_global = np.expand_dims(np.sum(masks_stack, axis=0), axis=-1).astype(np.float32)
+                else:
                     ks = node.bondingKernelSize.value
                     bonded_bin, bonded_color = sam3Utils.bond_masks(
                         masks=masks,
@@ -409,7 +470,7 @@ cryptomatte from a text prompt.
                     color_mask_image = bonded_color
 
                 if is_definitive:
-                    mask_images[frame_id] = np.maximum(mask_images[frame_id], mask_global, out=mask_images[frame_id])
+                    mask_images[frame_id] |= mask_global > 0
 
             # Save color mask image
             if node.outputColorMasks.value:
@@ -461,14 +522,15 @@ cryptomatte from a text prompt.
         """ Processes temporal tracking slices, resolves global IDs, and manages historical memory. """
         from segmentationRDS import sam3Utils
 
-        # Call prepareMasksForVisualization once per raw outputs dictionary to prevent repeating mutating calls
+        # Prepare raw outputs once and keep the prepared version for the next step (same mask arrays, no copy).
+        # No copy is needed below: slices are new dicts and ID assignment/merge never modify the detections.
         prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+        outputs_per_frame[frame_idx] = prepared_track
 
         # n == 0: Initialization block
         if n == 0:
-            # Deep copy to prevent in-place modifications from leaking between lists
-            fwd_only = copy.deepcopy(prepared_track)
-            bwd_only = copy.deepcopy(prepared_track)
+            fwd_only = prepared_track
+            bwd_only = prepared_track
             fwd_bwd = None
 
             # Properly initialize the Forward global ID tracking at n = 0
@@ -500,7 +562,7 @@ cryptomatte from a text prompt.
             return fwd_only, bwd_only, fwd_bwd
 
         # n > 0: Propagation & Merging block
-        track_fwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+        track_fwd = prepared_track
         first_frame = frame_idx
 
         # Keep the remaining forward frames on the last segment instead of truncating to frame_idx
@@ -519,7 +581,7 @@ cryptomatte from a text prompt.
         fwd_bwd = None
 
         if combine_fwd_bwd:
-            track_bwd = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx])
+            track_bwd = prepared_track
             first_frame_bwd = frame_idx_to_text_prompt[n - 1]
             last_frame_bwd = frame_idx
             bwd = self._slice_track(track_bwd, first_frame_bwd, last_frame_bwd)
@@ -529,22 +591,23 @@ cryptomatte from a text prompt.
             )
             logger.info(f"next_global_id_bwd = {track_states['bwd']['next_id']}")
 
-            # Fresh, completely isolated slice calculations for merge operations
-            prev_prepared_track = sam3Utils.prepareMasksForVisualization(outputs_per_frame[frame_idx_to_text_prompt[n - 1]])
-            track_fwd_for_merge = copy.deepcopy(prev_prepared_track)
-            track_bwd_for_merge = copy.deepcopy(prepared_track)
-            fwd_for_merge = self._slice_track(track_fwd_for_merge, first_frame_bwd, last_frame_bwd)
-            bwd_for_merge = self._slice_track(track_bwd_for_merge, first_frame_bwd, last_frame_bwd)
+            # Fresh slices for merge operations (merge_tracks clears them)
+            prev_prepared_track = outputs_per_frame[frame_idx_to_text_prompt[n - 1]]
+            fwd_for_merge = self._slice_track(prev_prepared_track, first_frame_bwd, last_frame_bwd)
+            bwd_for_merge = self._slice_track(prepared_track, first_frame_bwd, last_frame_bwd)
 
-            fwd_bwd, track_states["merged"]["prev_overlap"], track_states["merged"]["next_id"] = sam3Utils.merge_tracks(
-                fwd_results=fwd_for_merge,
-                bwd_results=bwd_for_merge,
-                prev_overlap_detections=track_states["merged"]["prev_overlap"],
-                next_global_id=track_states["merged"]["next_id"],
-                similarity_threshold_merge=0.3,
-                similarity_threshold_track=0.4,
-                use_mask=True,
-            )
+            merged_state = track_states["merged"]
+            fwd_bwd, merged_state["prev_overlap"], merged_state["next_id"], merged_state["lost"] = \
+                sam3Utils.merge_tracks(
+                    fwd_results=fwd_for_merge,
+                    bwd_results=bwd_for_merge,
+                    prev_overlap_detections=merged_state["prev_overlap"],
+                    next_global_id=merged_state["next_id"],
+                    similarity_threshold_merge=0.3,
+                    similarity_threshold_track=0.4,
+                    use_mask=True,
+                    prev_lost_detections=merged_state.get("lost"),
+                )
             color_palette.generate_palette(track_states["merged"]["next_id"] + 1)
             logger.info(f"next_global_id_merged = {track_states['merged']['next_id']}")
 
@@ -631,7 +694,7 @@ cryptomatte from a text prompt.
             if seed and n == 0:
                 # Junction diagnostic: compare raw detections of this pass on the reference frame with the seed
                 anchor_ids = seed["anchors"].get("forward", {})
-                raw_count = len(sam3Utils.prepareMasksForVisualization({0: outputs_per_frame[0][0]})[0])
+                raw_count = len(outputs_per_frame[0].get(0, {}))
                 new_ids = sorted(k for k in fwd_only.get(0, {}) if k >= seed_next_fwd)
                 matched = raw_count - len(new_ids)
                 logger.info(f"Reference frame junction: {matched} object(s) matched with the previous pass "
@@ -722,6 +785,9 @@ cryptomatte from a text prompt.
             gpus_to_use = [torch.cuda.current_device()]
             video_predictor = build_sam3_video_predictor(checkpoint_path=chunk.node.segmentationModelPath.evalValue,
                                                          gpus_to_use=gpus_to_use)
+            video_predictor.model.hotstart_unmatch_thresh = SAM3_HOTSTART_UNMATCH_THRESH
+            logger.info(f"SAM3 hotstart_unmatch_thresh = {SAM3_HOTSTART_UNMATCH_THRESH}")
+            _sam3_reset_hotstart_counters_on_reverse(video_predictor.model)
 
             metadata_deep_model = {}
             metadata_deep_model["Meshroom:mrSegmentation:DeepModelName"] = "SegmentAnything"
@@ -743,7 +809,8 @@ cryptomatte from a text prompt.
             if ref_idx > 0:
                 orders.append(list(range(ref_idx, -1, -1)))
 
-            pil_images, mask_images, source_info = self._load_source_images()
+            _sam3_accept_frame_tensor()
+            frames, mask_images, source_info = self._load_source_images(video_predictor.model)
 
             boxes = {}
             metadata_boxes = {frame_id: {} for frame_id in range(frame_number)}
@@ -762,9 +829,12 @@ cryptomatte from a text prompt.
             for pass_idx, order in enumerate(orders):
                 logger.info(f"Tracking pass from frame {self.image_paths[order[0]][2]} to frame {self.image_paths[order[-1]][2]}")
                 response = video_predictor.handle_request(
-                    request={"type": "start_session", "resource_path": [pil_images[i] for i in order]}
+                    request={"type": "start_session", "resource_path": [(frames[order], source_info["shape"][0], source_info["shape"][1])]}
                 )
                 session_id = response["session_id"]
+                if pass_idx == len(orders) - 1:
+                    # SAM3 keeps its own copy of the frames (on the GPU)
+                    del frames
 
                 # Run temporal tracking queries per text prompt configuration
                 for text_prompt in self.text_prompts:

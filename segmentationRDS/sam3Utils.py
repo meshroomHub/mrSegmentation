@@ -42,9 +42,30 @@ def propagateInVideo(predictor, session_id, start_frame_idx=None, max_frame_num_
     return outputs_per_frame
 
 
-def compute_mask_iou(mask_a: np.ndarray, mask_b: np.ndarray) -> float:
-    inter = np.logical_and(mask_a, mask_b).sum()
-    union = np.logical_or(mask_a, mask_b).sum()
+def _mask_bbox_area(det: dict):
+    # Cached on the detection: tight mask bbox (y0, y1, x0, x1) or None if empty, and pixel count
+    if det["mask"] is None:
+        return None, 0
+    if "_bbox" not in det:
+        mask = det["mask"]
+        rows = np.flatnonzero(mask.any(axis=1))
+        cols = np.flatnonzero(mask.any(axis=0))
+        det["_bbox"] = (rows[0], rows[-1] + 1, cols[0], cols[-1] + 1) if rows.size else None
+        det["_area"] = int(np.count_nonzero(mask))
+    return det["_bbox"], det["_area"]
+
+
+def compute_det_mask_iou(det_a: dict, det_b: dict) -> float:
+    """ Mask IoU of two detections; the intersection is only computed on the overlap of their mask bboxes. """
+    box_a, area_a = _mask_bbox_area(det_a)
+    box_b, area_b = _mask_bbox_area(det_b)
+    inter = 0
+    if box_a is not None and box_b is not None:
+        y0, y1 = max(box_a[0], box_b[0]), min(box_a[1], box_b[1])
+        x0, x1 = max(box_a[2], box_b[2]), min(box_a[3], box_b[3])
+        if y0 < y1 and x0 < x1:
+            inter = int(np.count_nonzero(np.logical_and(det_a["mask"][y0:y1, x0:x1], det_b["mask"][y0:y1, x0:x1])))
+    union = area_a + area_b - inter
     return float(inter / union) if union > 0 else 0.0
 
 
@@ -62,7 +83,7 @@ def compute_box_iou(box_a: np.ndarray, box_b: np.ndarray) -> float:
 
 def compute_similarity(det_a: dict, det_b: dict, use_mask: bool = True) -> float:
     if use_mask and det_a["mask"] is not None and det_b["mask"] is not None:
-        iou = compute_mask_iou(det_a["mask"], det_b["mask"])
+        iou = compute_det_mask_iou(det_a, det_b)
     else:
         iou = compute_box_iou(det_a["box_xywh"], det_b["box_xywh"])
     prob_score = (det_a["prob"] + det_b["prob"]) / 2.0
@@ -115,10 +136,46 @@ def match_detections(
     return matches, unmatched_a, unmatched_b
 
 
-def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict]) -> dict:
+UNION_CONTAINMENT = 0.9  # smaller mask inside the larger one at this ratio: both describe the same object
+
+
+def _contained_union(chosen: dict, partner: dict, others) -> Optional[np.ndarray]:
+    """
+    Chosen mask plus the partner pixels claimed by no other detection, when the smaller of the two masks lies
+    inside the larger one (one direction lost a part of the object, e.g. a coat or an occluded limb).
+    Returns None when the masks disagree.
+    """
+    box_c, area_c = _mask_bbox_area(chosen)
+    box_p, area_p = _mask_bbox_area(partner)
+    if box_c is None or box_p is None:
+        return None
+    y0, y1 = max(box_c[0], box_p[0]), min(box_c[1], box_p[1])
+    x0, x1 = max(box_c[2], box_p[2]), min(box_c[3], box_p[3])
+    inter = int(np.count_nonzero(chosen["mask"][y0:y1, x0:x1] & partner["mask"][y0:y1, x0:x1])) if y0 < y1 and x0 < x1 else 0
+    if inter < UNION_CONTAINMENT * min(area_c, area_p):
+        return None
+    # Partner pixels lie in the partner bbox: only that crop can change
+    py0, py1, px0, px1 = box_p
+    add = partner["mask"][py0:py1, px0:px1].copy()
+    for det in others:
+        box_o, _ = _mask_bbox_area(det)
+        if box_o is None:
+            continue
+        oy0, oy1 = max(py0, box_o[0]), min(py1, box_o[1])
+        ox0, ox1 = max(px0, box_o[2]), min(px1, box_o[3])
+        if oy0 < oy1 and ox0 < ox1:
+            add[oy0 - py0:oy1 - py0, ox0 - px0:ox1 - px0] &= ~det["mask"][oy0:oy1, ox0:ox1]
+    mask = chosen["mask"].copy()
+    mask[py0:py1, px0:px1] |= add
+    return mask
+
+
+def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict], others=None) -> dict:
     """
     Merge two detections for the same instance on the same frame.
     If only one is available, return it as-is.
+    The mask of the most probable detection is kept. When others (the other detections of the frame) is given
+    and one mask lies inside the other, the partner pixels claimed by none of them are added to it.
     """
     if det_fwd is None:
         return det_bwd
@@ -131,11 +188,12 @@ def merge_two_detections(det_fwd: Optional[dict], det_bwd: Optional[dict]) -> di
     w_b = 1.0 - w_f
 
     if det_fwd["mask"] is not None and det_bwd["mask"] is not None:
-        score = (
-            w_f * det_fwd["mask"].astype(np.float32)
-            + w_b * det_bwd["mask"].astype(np.float32)
-        )
-        mask = (score > 0.5).astype(bool)
+        chosen, partner = (det_fwd, det_bwd) if w_f > 0.5 else (det_bwd, det_fwd)
+        mask = _contained_union(chosen, partner, others) if others is not None else None
+        if mask is None:
+            # Same as thresholding w_f * mask_fwd + w_b * mask_bwd at 0.5, except at an exact tie (w_f == 0.5,
+            # equal float32 probs): the bwd mask is kept instead of the intersection
+            mask = chosen["mask"]
     else:
         mask = det_fwd["mask"] if det_fwd["mask"] is not None else det_bwd["mask"]
 
@@ -176,17 +234,22 @@ def merge_chunk_forward_backward(
 
     - Forward IDs are used as the local reference IDs.
     - Objects seen only in backward receive a temporary negative local ID.
-    - The bwd->fwd mapping is stabilised by majority vote across all frames.
+    - A bwd detection takes the fwd ID it is matched with on its frame; the bwd->fwd majority vote over all
+      frames is only used on frames where it is not matched, or where that match is a one-frame accident
+      (the vote disagrees, the pair is matched on this frame only while the fwd ID lasts 3+ frames, and the
+      voted fwd ID still exists on this frame or later; once it has ended, the matched fwd ID is its continuation).
     """
     all_frames = sorted(set(fwd_results) | set(bwd_results))
 
     # Build a stable bwd_id -> fwd_id mapping via majority vote over all frames
     votes: Dict[int, Dict[int, int]] = {}  # {bwd_id: {fwd_id: count}}
+    frame_matches: Dict[int, Dict[int, int]] = {}  # {frame_idx: {bwd_id: fwd_id}} matched on that frame
 
     for frame_idx in all_frames:
         fwd_frame = fwd_results.get(frame_idx, {})
         bwd_frame = bwd_results.get(frame_idx, {})
         matches, _, _ = match_detections(fwd_frame, bwd_frame, similarity_threshold, use_mask)
+        frame_matches[frame_idx] = {bwd_id: fwd_id for fwd_id, bwd_id in matches.items()}
         for fwd_id, bwd_id in matches.items():
             votes.setdefault(bwd_id, {})
             votes[bwd_id][fwd_id] = votes[bwd_id].get(fwd_id, 0) + 1
@@ -195,6 +258,12 @@ def merge_chunk_forward_backward(
         bwd_id: max(fwd_votes, key=fwd_votes.get)
         for bwd_id, fwd_votes in votes.items()
     }
+    fwd_frame_count: Dict[int, int] = {}  # {fwd_id: number of frames where it exists}
+    fwd_last_frame: Dict[int, int] = {}   # {fwd_id: last frame where it exists}
+    for frame_idx, fwd_frame in fwd_results.items():
+        for fwd_id in fwd_frame:
+            fwd_frame_count[fwd_id] = fwd_frame_count.get(fwd_id, 0) + 1
+            fwd_last_frame[fwd_id] = max(fwd_last_frame.get(fwd_id, frame_idx), frame_idx)
 
     # Frame-by-frame fusion
     bwd_only_map: Dict[int, int] = {}
@@ -206,11 +275,25 @@ def merge_chunk_forward_backward(
         bwd_frame = bwd_results.get(frame_idx, {})
         merged_frame: Dict[int, dict] = {}
         seen_fwd_ids = set()
+        matches_here = frame_matches[frame_idx]  # one-to-one {bwd_id: fwd_id} on this frame
+        matched_fwd_ids = set(matches_here.values())
 
         for bwd_id, det_b in bwd_frame.items():
-            if bwd_id in bwd_to_fwd:
+            # The match on this frame wins over the vote: when they disagree (fwd ID switch inside the chunk),
+            # following the vote would output the matched fwd detection a second time under its own ID.
+            fwd_id = matches_here.get(bwd_id)
+            if (fwd_id is not None and bwd_to_fwd[bwd_id] != fwd_id and votes[bwd_id][fwd_id] == 1
+                    and fwd_frame_count[fwd_id] >= 3 and fwd_last_frame[bwd_to_fwd[bwd_id]] >= frame_idx):
+                # One-frame accidental match (e.g. a fwd mask leaking onto a neighbour): do not merge two
+                # different objects; the fwd detection is output alone below.
+                fwd_id = None
+            if fwd_id is None and bwd_id in bwd_to_fwd:
                 fwd_id = bwd_to_fwd[bwd_id]
-                merged_frame[fwd_id] = merge_two_detections(fwd_frame.get(fwd_id), det_b)
+                if fwd_id in matched_fwd_ids or fwd_id in seen_fwd_ids:
+                    fwd_id = None  # voted fwd ID already taken on this frame: keep the object, as bwd-only
+            if fwd_id is not None:
+                others = [d for i, d in fwd_frame.items() if i != fwd_id] + [d for i, d in bwd_frame.items() if i != bwd_id]
+                merged_frame[fwd_id] = merge_two_detections(fwd_frame.get(fwd_id), det_b, others)
                 seen_fwd_ids.add(fwd_id)
             else:
                 # Object seen only in backward pass
@@ -292,6 +375,7 @@ def assign_global_ids(
     next_global_id: int,
     similarity_threshold: float = 0.4,
     use_mask: bool = True,
+    prev_lost_detections: Optional[Dict[int, dict]] = None,
 ) -> Tuple[FrameResults, Dict[int, dict], int]:
     """
     Replace local IDs in the merged chunk with globally consistent IDs,
@@ -305,6 +389,9 @@ def assign_global_ids(
         prev_overlap_detections  : {global_id: det} of the overlap frame
                                    from the previous chunk (empty for chunk 0)
         next_global_id           : next available global ID
+        prev_lost_detections     : {global_id: det} of objects that ended just before the overlap frame. A local
+                                   object left unmatched on the overlap frame takes the ID of one of them it matches
+                                   (they are only used for matching, never copied into the result).
 
     Returns:
         global_chunk        : {frame_idx: {global_id: det}}
@@ -325,6 +412,19 @@ def assign_global_ids(
         similarity_threshold,
         use_mask,
     )
+
+    # Unmatched local objects that continue an object lost just before the overlap frame keep its ID
+    if prev_lost_detections and unmatched_local:
+        resumed, _, _ = match_detections(
+            {lid: overlap_det_curr[lid] for lid in unmatched_local},
+            {gid: det for gid, det in prev_lost_detections.items() if gid not in merged_overlap},
+            similarity_threshold,
+            use_mask,
+        )
+        for local_id, global_id in resumed.items():
+            local_to_global[local_id] = global_id
+            merged_overlap[global_id] = overlap_det_curr[local_id]
+            del unmatched_local[local_id]
 
     # Assign new global IDs to unmatched local objects and insert them directly
     # into merged_overlap — no temporary IDs, no collision risk.
@@ -365,7 +465,8 @@ def merge_tracks(
     similarity_threshold_merge: float = 0.3,
     similarity_threshold_track: float = 0.4,
     use_mask: bool = True,
-) -> Tuple[FrameResults, Dict[int, dict], int]:
+    prev_lost_detections: Optional[Dict[int, dict]] = None,
+) -> Tuple[FrameResults, Dict[int, dict], int, Dict[int, dict]]:
     """
     Process a single chunk end-to-end:
       1. Merge forward and backward results.
@@ -384,6 +485,7 @@ def merge_tracks(
         prev_overlap_detections  : {global_id: det} of the last frame of chunk k-1
                                    (empty dict for the very first chunk)
         next_global_id           : next available global ID (0 for the first chunk)
+        prev_lost_detections     : lost detections returned by the previous call (None for the first chunk)
 
     Returns:
         global_chunk        : {frame_idx: {global_id: det}}
@@ -391,6 +493,10 @@ def merge_tracks(
         new_overlap_frame   : {global_id: det} — last frame of this chunk,
                               to be passed as prev_overlap_detections for chunk k+1
         next_global_id      : updated, to be passed to the next call
+        lost_detections     : {global_id: det} of objects seen on the 2 frames before the last one but not on the
+                              last one (latest detection), to be passed as prev_lost_detections for chunk k+1.
+                              A backward pass starts at prompt frame - 1, so an object that only the backward pass
+                              tracks ends there and is found again by the next chunk on the overlap frame.
     """
     # Step 1 — fuse forward and backward within the chunk
     chunk_merged = merge_chunk_forward_backward(
@@ -409,10 +515,16 @@ def merge_tracks(
         next_global_id,
         similarity_threshold=similarity_threshold_track,
         use_mask=use_mask,
+        prev_lost_detections=prev_lost_detections,
     )
     chunk_merged.clear()
 
-    return global_chunk, new_overlap_frame, next_global_id
+    lost_detections: Dict[int, dict] = {}
+    for frame_idx in sorted(global_chunk)[-3:-1]:  # later frames overwrite: latest detection kept
+        lost_detections.update({gid: det for gid, det in global_chunk[frame_idx].items()
+                                if gid not in new_overlap_frame})
+
+    return global_chunk, new_overlap_frame, next_global_id, lost_detections
 
 
 def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel_size: int = 11,
@@ -426,45 +538,61 @@ def bond_masks(masks, colors=None, dilate_kernel_size: int = 11, conflict_kernel
     from scipy.ndimage import distance_transform_edt
 
     bonded_color_mask = None
+    height, width = masks[0].shape[:2]
 
-    # Dilate each individual mask
+    def roi(m, pad):
+        # Bbox of the non-zero pixels of m grown by pad, as slices (None if m is empty)
+        rows = np.flatnonzero(m.any(axis=1))
+        if not rows.size:
+            return None
+        cols = np.flatnonzero(m.any(axis=0))
+        return (slice(max(rows[0] - pad, 0), min(rows[-1] + 1 + pad, height)),
+                slice(max(cols[0] - pad, 0), min(cols[-1] + 1 + pad, width)))
+
+    # Per mask, on its bbox only (pixels outside are zero): dilate and count overlaps,
+    # sum masks into the global mask and draw the raw color mask
     kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (dilate_kernel_size, dilate_kernel_size))
-    dilated_masks = [cv2.dilate(np.round(m).astype(np.uint8), kernel_dilate) for m in masks]
-    dilated_stack = np.stack(dilated_masks, axis=0)
+    overlap_map = np.zeros((height, width), dtype=np.uint16)
+    mask_sum = np.zeros((height, width), dtype=np.float64)
+    color_mask_raw = np.zeros((height, width, 3), dtype=np.float32) if colors else None
+    for i, m in enumerate(masks):
+        r = roi(m, dilate_kernel_size)
+        if r is None:
+            continue
+        crop = m[r]
+        overlap_map[r] += cv2.dilate(np.round(crop).astype(np.uint8), kernel_dilate)
+        mask_sum[r] += crop
+        if colors and i < len(colors):
+            color_mask_raw[r][crop > 0] = colors[i]
+    conflict_zone = overlap_map >= 2
 
-    # Detect overlapping regions to generate the activation mask
-    overlap_map = np.sum(dilated_stack, axis=0)
-    conflict_zone = (overlap_map >= 2).astype(np.uint8) * 255
-    kernel_conflict = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (conflict_kernel_size, conflict_kernel_size))
-    action_mask = cv2.dilate(conflict_zone, kernel_conflict)
+    global_mask_raw = (mask_sum > 0).astype(np.uint8) * 255
+    bonded_binary_mask = global_mask_raw.astype(np.float32)
 
-    # Merge individual masks into a single global mask
-    masks_stack = np.stack(masks, axis=0)
-    global_mask_raw = (np.sum(masks_stack, axis=0) > 0).astype(np.uint8) * 255 
-
-    # Apply morphological closing to fill holes in the global mask
-    kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_kernel_size, close_kernel_size))
-    global_mask_closed = cv2.morphologyEx(global_mask_raw, cv2.MORPH_CLOSE, kernel_close)
-
-    # Apply the closed mask only within detected conflict regions
-    bonded_binary_mask = np.where(action_mask > 0, global_mask_closed, global_mask_raw).astype(np.float32)
+    # Apply the closed global mask only within the dilated conflict regions. Exact on the crop:
+    # it holds every conflict pixel, and closing needs 2 kernel sizes of context around the action area.
+    r = roi(conflict_zone, conflict_kernel_size + 2 * close_kernel_size)
+    if r is not None:
+        kernel_conflict = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (conflict_kernel_size, conflict_kernel_size))
+        action_mask = cv2.dilate(conflict_zone[r].astype(np.uint8) * 255, kernel_conflict)
+        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_kernel_size, close_kernel_size))
+        global_mask_closed = cv2.morphologyEx(global_mask_raw[r], cv2.MORPH_CLOSE, kernel_close)
+        bonded_binary_mask[r] = np.where(action_mask > 0, global_mask_closed, global_mask_raw[r])
 
     # Harmonized color bonding steps
     if colors:
-        height, width = masks[0].shape[:2]
-        color_mask_raw = np.zeros((height, width, 3), dtype=np.float32)
-        for mask, color in zip(masks, colors):
-            color_mask_raw[mask > 0] = color
-
         # Identify new pixels created strictly by the bonding process
         # (Where the bonded binary is active, but raw binary wasn't)
         bonding_gap = (bonded_binary_mask > 0) & (global_mask_raw == 0)
 
         bonded_color_mask = color_mask_raw.copy()
-        if np.any(bonding_gap):
+        # A closing only adds pixels within one kernel size of a raw pixel, so the nearest one is in the crop
+        r = roi(bonding_gap, 2 * close_kernel_size)
+        if r is not None:
+            gap = bonding_gap[r]
             # Find coordinates of the closest original colored pixels
-            _, indices = distance_transform_edt(global_mask_raw == 0, return_indices=True)
+            _, indices = distance_transform_edt(global_mask_raw[r] == 0, return_indices=True)
             # Map nearest colors directly into the gap
-            bonded_color_mask[bonding_gap] = color_mask_raw[indices[0][bonding_gap], indices[1][bonding_gap]]
+            bonded_color_mask[r][gap] = color_mask_raw[r][indices[0][gap], indices[1][gap]]
 
     return bonded_binary_mask, bonded_color_mask
